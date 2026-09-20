@@ -11,6 +11,7 @@ from app.diagnostics import exception_fields, safe_fields
 from app.network import guard_network, validate_url
 from app.media import get_ffmpeg
 from app.errors import MediaError, describe_error
+from app.source_trace import trace_requests
 
 MAX_BYTES = 500 * 1024 * 1024
 
@@ -66,7 +67,10 @@ class SourceLogger:
     info = debug
 
     def warning(self, message):
-        diagnostic("source_warning", code=describe_error(Exception(message)).code)
+        text = message.lower()
+        hint = ('browser_transport_unavailable' if 'impersonat' in text and 'available' in text
+                else 'generic_fallback' if 'generic' in text and 'falling back' in text else 'unknown')
+        diagnostic("source_warning", code=describe_error(Exception(message)).code, source_hint=hint)
 
     def error(self, message):
         diagnostic("source_error", code=describe_error(Exception(message)).code)
@@ -123,9 +127,11 @@ def summarize(info):
 
 def run():
     import yt_dlp
+    from yt_dlp.version import __version__
     from yt_dlp.downloader.external import FFmpegFD
 
     payload = json.loads(sys.stdin.readline())
+    diagnostic('engine_ready', engine_version=__version__)
     if payload.get('vpn_proxy'):
         guard_network(proxy=payload['vpn_proxy'])
     else:
@@ -168,6 +174,7 @@ def run():
     if mode == "analyze":
         stage("extract")
         with yt_dlp.YoutubeDL(options) as downloader:
+            trace_requests(downloader, url, diagnostic)
             info = downloader.extract_info(url, download=False)
         emit(event="result", metadata=summarize(info))
         return
@@ -189,6 +196,7 @@ def run():
     options["match_filter"] = match_filter
     stage("download")
     with yt_dlp.YoutubeDL(options) as downloader:
+        trace_requests(downloader, url, diagnostic)
         try:
             downloader.extract_info(url, download=True)
         except yt_dlp.utils.MaxDownloadsReached:

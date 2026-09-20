@@ -83,6 +83,18 @@ Hata yığınında yalnız kod dosyası, fonksiyon ve satır numarası bulunur; 
 
 `worker_failed.causes`, yt-dlp'nin `exc_info`/`cause` alanları dahil en fazla sekiz bağlı istisnanın türünü ve varsa HTTP hata kodunu tutar. Ham hata metni kaydedilmez. `source_parse` sayfa yanıtının çözümlenemediğini, `tls_failed` güvenli bağlantı sorununu ayırır. Geçmişte yalnız `source_failed` olarak yazılmış kayıtların asıl nedeni geriye dönük çıkarılamaz; aynı kaynak yeniden denenmelidir.
 
+### Kaynak isteğini ve denemeleri ayırma
+
+Her üst düzey işlem `request_id` alır; doğrudan ve Proton denemeleri aynı kimliği paylaşır, her worker'ın `operation_id` değeri ayrıdır. Hata ekranındaki kısa işlem kodu loglarda bu kimliğin başlangıcını aramak içindir. `routing_failed` son denemenin rotasını ve hata nedenini özetler. Kaynağın VPN üzerinden reddettiği istek, arayüzde açıkça belirtilir.
+
+`request_finished` / `request_failed` olayları HTTP yöntemini, durum kodunu, süreyi ve kaynak türünü ayırır. `resource`, istenen adresin dosya uzantısından ve başarılı yanıtlarda içerik türünden çıkarılır; belirsiz adresler `other` olarak kalır. `HEAD 200`, sonraki `GET` veya medya isteğinin başarılı olduğunu göstermez. İstek gövdeleri, başlık değerleri, URL, çerez ve token kaydedilmez. `target_ref` yalnız aynı worker içinde tekrarlanan hedefleri ilişkilendiren, her çalıştırmada rastgele tuzla yenilenen bir özettir.
+
+Başarılı istek kayıtları ilk 40 istekle sınırlıdır; hatalar ve bir hatadan sonraki toparlanma ayrıca görünür. `cookie_count`, `has_referer` ve `user_agent_changed` oturum tutarlılığını değerleri ifşa etmeden gözlemlemek içindir. Bunlar tek başına bir sitenin beklediği oturumun geçerli olduğunu kanıtlamaz. `engine_ready` motor sürümünü; `source_warning.source_hint` genel çözümleyiciye dönüş veya kullanılamayan isteğe bağlı tarayıcı aktarımı uyarısını ayırır. Bu uyarı tek başına 403 nedeni sayılmaz.
+
+Kontrollü test, oturum çerezi ve doğru Referer olmadan 403 veren yerel bir sayfadan gerçek MP4 indirir. Çerez ve başlık aktarımı mevcut yt-dlp oturumunda korunur; analiz ve indirme ayrı süreçler olduğundan indirme kaynak sayfasını tekrar çözümler. Tarayıcının kişisel oturumu içe aktarılmaz.
+
+Uyumluluk incelemesinde (20 Eylül 2026) kurulu `2026.08.19` sürümü, PyPI ve GitHub'daki son kararlı sürümle aynıydı; kanıtlanmış bir güncelleme farkı olmadığı için sürüm değiştirilmedi. Otomatik strateji en fazla bir doğrudan ve bir Proton denemesiyle sınırlıdır; aynı işlemde rastgele sağlayıcı/sürüm değişimi veya sınırsız yeniden deneme yoktur.
+
 HTTP erişim logu yalnız isteğin kabulünü gösterir: indirmeye verilen `202`, dosyanın tamamlandığı anlamına gelmez. Ayrıntılı loglama eklenmeden önceki hatalarda kesin boyut ve aşama geriye dönük belirlenemez.
 
 Canlı siteler zamanla değiştiği için bu testler belirli bir sitenin her zaman çalışacağı anlamına gelmez. Gerçek kaynak denemeleri ayrıca yapılmalıdır.

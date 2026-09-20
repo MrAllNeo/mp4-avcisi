@@ -23,6 +23,10 @@ async function api(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(typeof data.detail === 'string' ? data.detail : 'İşlem tamamlanamadı. Bilgileri kontrol edip yeniden dene.');
+    const reference = data.diagnostic?.request_id;
+    if (typeof reference === 'string' && /^[a-f0-9]{32}$/.test(reference)) {
+      error.message += ` İşlem kodu: ${reference.slice(0, 8)}.`;
+    }
     error.status = response.status;
     throw error;
   }

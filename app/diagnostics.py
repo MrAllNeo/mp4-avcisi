@@ -22,6 +22,10 @@ logger.propagate = False
 logger.addHandler(logging.NullHandler())
 
 CHOICES = {
+    'resource': {'source_page', 'embedded_page', 'metadata', 'manifest', 'media', 'other'},
+    'method': {'GET', 'HEAD', 'POST', 'PUT', 'OPTIONS', 'DELETE', 'PATCH'},
+    'origin_relation': {'same', 'other'},
+    'source_hint': {'generic_fallback', 'browser_transport_unavailable', 'unknown'},
     'route': {'direct', 'proton'},
     'stage': {'startup', 'extract', 'download', 'probe', 'remux', 'transcode', 'finalize', 'storage'},
     'mode': {'analyze', 'download'},
@@ -31,13 +35,14 @@ CHOICES = {
 }
 COUNTS = {'downloaded_bytes', 'total_bytes', 'estimated_bytes', 'limit_bytes', 'size',
           'height', 'percent', 'elapsed_ms', 'timeout_seconds', 'returncode', 'stderr_bytes',
-          'errno', 'line', 'count'}
+          'errno', 'line', 'count', 'request_number', 'cookie_count', 'attempt'}
 EVENTS = set('server_started server_stopped job_queued job_started job_finished job_failed '
              'job_expired job_task_failed storage_failed cleanup_failed worker_started '
              'worker_finished worker_failed worker_cancelled worker_stderr worker_protocol_error '
              'stage_started progress size_limit source_warning source_error ffmpeg_finished '
              'ffmpeg_failed legacy_failure vpn_starting vpn_connected vpn_stopped '
-             'vpn_cleanup_failed vpn_fallback vpn_unconfigured'.split())
+             'vpn_cleanup_failed vpn_fallback vpn_unconfigured engine_ready '
+             'request_finished request_failed routing_failed'.split())
 
 
 class PrivateRotatingHandler(RotatingFileHandler):
@@ -83,11 +88,17 @@ def safe_fields(fields):
             result[key] = value
         elif key in COUNTS and (type(value) is int or (type(value) is float and math.isfinite(value))):
             result[key] = value
-        elif key in {'job_id', 'operation_id'} and isinstance(value, str) and re.fullmatch(r'[a-f0-9]{32}', value):
+        elif key in {'job_id', 'operation_id', 'request_id'} and isinstance(value, str) and re.fullmatch(r'[a-f0-9]{32}', value):
+            result[key] = value
+        elif key == 'target_ref' and isinstance(value, str) and re.fullmatch(r'[a-f0-9]{16}', value):
+            result[key] = value
+        elif key == 'engine_version' and isinstance(value, str) and re.fullmatch(r'[0-9.]{1,32}', value):
+            result[key] = value
+        elif key == 'http_status' and type(value) is int and 100 <= value <= 599:
             result[key] = value
         elif key in {'code', 'exception_type'} and isinstance(value, str) and re.fullmatch(r'[A-Za-z_]{1,64}', value):
             result[key] = value
-        elif key == 'retryable' and isinstance(value, bool):
+        elif key in {'retryable', 'redirected', 'has_referer', 'user_agent_changed'} and isinstance(value, bool):
             result[key] = value
         elif key == 'causes' and isinstance(value, list):
             result[key] = [{k: v for k, v in cause.items()

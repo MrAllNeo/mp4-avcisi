@@ -113,3 +113,20 @@ def test_spawn_error_is_classified_without_leaking_paths(monkeypatch, tmp_path):
         asyncio.run(main.worker({'mode': 'analyze'}))
     assert caught.value.code == 'worker_start_failed' and caught.value.retryable
     assert 'secret-path' not in (tmp_path / 'events.jsonl').read_text()
+
+
+def test_failed_request_context_reaches_public_error_and_log(stub_worker, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(main, 'gateway', SimpleNamespace(configured=False))
+    install, processes, log = stub_worker
+    install('print(json.dumps({"event":"diagnostic","name":"request_failed","fields":'
+            '{"resource":"manifest","method":"GET","http_status":403,"request_number":3,"url":"secret"}}),flush=True)\n'
+            'print(json.dumps({"event":"error","code":"access_denied","message":"Denied","retryable":False}),flush=True)')
+    with pytest.raises(MediaError) as caught:
+        asyncio.run(main.worker({'mode': 'analyze'}))
+    error = caught.value
+    assert error.diagnostic['resource'] == 'manifest' and error.diagnostic['http_status'] == 403
+    assert 'akış listesi' in error.message and 'HTTP 403' in error.message
+    entries = [json.loads(line) for line in log.read_text().splitlines()]
+    assert all(e['request_id'] == error.diagnostic['request_id'] for e in entries)
+    assert 'secret' not in log.read_text() and 'secret' not in json.dumps(error.diagnostic)

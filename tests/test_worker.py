@@ -97,6 +97,7 @@ def test_pipeline_falls_back_to_transcode_and_only_reports_valid_result(tmp_path
             (tmp_path / 'source.webm').write_bytes(b'fixture')
             return {'title': 'fixture'}
     monkeypatch.setattr(yt_dlp, 'YoutubeDL', Downloader)
+    monkeypatch.setattr(worker, 'trace_requests', lambda *args: None)
     monkeypatch.setattr(worker, 'guard_network', lambda: None)
     monkeypatch.setattr(worker, 'get_ffmpeg', lambda: 'ffmpeg')
     monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps({

@@ -22,8 +22,24 @@ from app.errors import MediaError
 
 class RangeHandler(SimpleHTTPRequestHandler):
     ranges = []
+    session_requests = []
 
     def do_GET(self):
+        path = urlsplit(self.path).path
+        if path == '/session.html':
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.send_header('Set-Cookie', 'media_session=fixture-secret; Path=/; HttpOnly')
+            self.end_headers()
+            self.wfile.write(b'<html><title>Session fixture</title><video src="/session.mp4"></video></html>')
+            return
+        if path == '/session.mp4':
+            type(self).session_requests.append(dict(self.headers))
+            expected_referrer = f'http://{self.headers["Host"]}/session.html'
+            if 'media_session=fixture-secret' not in self.headers.get('Cookie', '') or self.headers.get('Referer') != expected_referrer:
+                self.send_error(403)
+                return
+            self.path = '/sample.mp4'
         requested_range = self.headers.get('Range')
         if urlsplit(self.path).path == '/sample.mp4' and requested_range:
             self.ranges.append(requested_range)
@@ -94,6 +110,25 @@ def test_partial_download_resumes_with_http_range(media_server, tmp_path, monkey
     assert target.read_bytes()[4:8] == b'ftyp'
     subprocess.run([get_ffmpeg(), '-v', 'error', '-i', str(target), '-map', '0:v:0',
                     '-map', '0:a:0', '-f', 'null', '-'], check=True, capture_output=True)
+
+
+def test_public_page_session_and_referrer_survive_real_download(media_server, tmp_path, monkeypatch, capsys):
+    RangeHandler.session_requests.clear()
+    monkeypatch.setattr(worker, 'guard_network', lambda: None)
+    monkeypatch.setattr(worker, 'validate_url', lambda url: url)
+    monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps({
+        'mode': 'download', 'url': f'{media_server}/session.html', 'directory': str(tmp_path),
+    })))
+    worker.run()
+    assert RangeHandler.session_requests
+    assert len({r['User-Agent'] for r in RangeHandler.session_requests}) == 1
+    raw = capsys.readouterr().out
+    assert 'fixture-secret' not in raw and 'session.html' not in raw
+    events = [json.loads(line) for line in raw.splitlines()]
+    media = [e['fields'] for e in events if e.get('name') == 'request_finished' and e['fields']['resource'] == 'media']
+    assert media and all(e['cookie_count'] >= 1 and e['has_referer'] for e in media)
+    assert all(not e['user_agent_changed'] for e in media)
+    assert (tmp_path / 'video.mp4').read_bytes()[4:8] == b'ftyp'
 
 
 @pytest.mark.parametrize('source', ['sample.mp4', 'sample.m3u8'])

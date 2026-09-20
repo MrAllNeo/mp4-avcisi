@@ -116,7 +116,10 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=['localhost', '127.0.0.1
 
 @app.exception_handler(MediaError)
 async def media_error_handler(request, error):
-    return JSONResponse({'detail': error.message, 'code': error.code, 'retryable': error.retryable}, status_code=422)
+    body = {'detail': error.message, 'code': error.code, 'retryable': error.retryable}
+    if getattr(error, 'diagnostic', None):
+        body['diagnostic'] = diagnostics.safe_fields(error.diagnostic)
+    return JSONResponse(body, status_code=422)
 
 
 @app.middleware('http')
@@ -155,12 +158,30 @@ class DownloadInput(BaseModel):
 
 
 async def worker(payload, on_event=None, timeout=90):
+    payload = {**payload, 'request_id': uuid4().hex}
     try:
         return await _routed_worker(payload, on_event, timeout)
     except TimeoutError:
         diagnostics.record('worker_failed', job_id=payload.get('job_id'), mode=payload['mode'],
-                           code='timeout', retryable=True)
+                           request_id=payload['request_id'], code='timeout', retryable=True)
         raise
+    except Exception as exc:
+        error = describe_error(exc)
+        detail = getattr(error, 'diagnostic', {})
+        error.diagnostic = diagnostics.safe_fields({**detail, 'request_id': payload['request_id'],
+            'mode': payload['mode'], 'route': detail.get('route', payload.get('route', 'direct'))})
+        if error.code == 'source_failed' and payload['mode'] == 'analyze':
+            error.message = 'Sayfadan video bilgileri alınamadı. Yanıtın neden çözümlenemediği henüz belirlenemedi.'
+        if error.code == 'access_denied':
+            resource = {'source_page': 'sayfa', 'embedded_page': 'gömülü sayfa',
+                        'manifest': 'akış listesi', 'metadata': 'video bilgisi', 'media': 'medya dosyası'}.get(detail.get('resource'), 'kaynak')
+            error.message = f'Kaynak site {resource} isteğini reddetti (HTTP 403).'
+            if not gateway.configured and error.diagnostic['route'] == 'direct':
+                error.message += ' Otomatik Proton VPN yapılandırılmadığı için alternatif bağlantı denenemedi.'
+        if error.diagnostic['route'] == 'proton' and error.code not in {'vpn_config', 'vpn_unavailable'}:
+            error.message += ' Bu hata Proton VPN üzerinden yapılan denemede oluştu.'
+        diagnostics.record('routing_failed', **error.diagnostic, code=error.code)
+        raise error from None
 
 
 async def _routed_worker(payload, on_event=None, timeout=90):
@@ -178,21 +199,28 @@ async def _routed_worker(payload, on_event=None, timeout=90):
                 if not can_retry_via_vpn(error):
                     raise
                 if not gateway.configured:
-                    diagnostics.record('vpn_unconfigured', job_id=payload.get('job_id'), code=error.code)
+                    diagnostics.record('vpn_unconfigured', job_id=payload.get('job_id'), request_id=payload.get('request_id'), code=error.code)
                     error.message += ' Otomatik Proton VPN yapılandırılmadığı için alternatif bağlantı denenemedi.'
                     raise error from None
-                diagnostics.record('vpn_fallback', job_id=payload.get('job_id'), code=error.code, route='proton')
+                diagnostics.record('vpn_fallback', job_id=payload.get('job_id'), request_id=payload.get('request_id'), code=error.code, route='proton')
         elif not gateway.configured:
             raise MediaError('vpn_config', 'Bu işlem Proton VPN gerektiriyor. Sunucunun VPN ayarlarını kontrol et.', True)
         if on_event:
             on_event({'event': 'progress', 'message': 'Proton VPN bağlantısı hazırlanıyor…', 'percent': None, 'route': 'proton'})
-        async with gateway.connection() as proxy:
-            result = await _worker_once({**payload, 'vpn_proxy': proxy, 'route': 'proton'}, on_event, timeout=timeout)
-            return {**result, 'route': 'proton'}
+        try:
+            async with gateway.connection() as proxy:
+                result = await _worker_once({**payload, 'vpn_proxy': proxy, 'route': 'proton'}, on_event, timeout=timeout)
+                return {**result, 'route': 'proton'}
+        except Exception as exc:
+            error = describe_error(exc)
+            error.diagnostic = {**getattr(error, 'diagnostic', {}), 'route': 'proton',
+                                'attempt': 1 if payload.get('route') == 'proton' else 2}
+            raise error from None
 
 
 async def _worker_once(payload, on_event=None, timeout=90):
     context = {'operation_id': uuid4().hex, 'job_id': payload.get('job_id'),
+               'request_id': payload.get('request_id'),
                'mode': payload['mode'], 'stage': 'startup', 'route': payload.get('route', 'direct')}
     started = time.monotonic()
     diagnostics.record('worker_started', **context, timeout_seconds=timeout, height=payload.get('height'))
@@ -226,6 +254,7 @@ async def _worker_once(payload, on_event=None, timeout=90):
         await process.stdin.drain()
         process.stdin.close()
         result = None
+        last_request_failure = {}
         while True:
             try:
                 line = await process.stdout.readline()
@@ -243,6 +272,10 @@ async def _worker_once(payload, on_event=None, timeout=90):
                         or event['name'] not in diagnostics.EVENTS):
                     raise protocol_error()
                 fields = diagnostics.safe_fields(fields)
+                if event['name'] == 'request_failed':
+                    last_request_failure = {key: fields[key] for key in ('resource', 'method', 'http_status', 'request_number') if key in fields}
+                elif event['name'] in {'request_finished', 'stage_started'}:
+                    last_request_failure = {}
                 if 'stage' in fields:
                     context['stage'] = fields['stage']
                 diagnostics.record(event.get('name'), **(fields | context))
@@ -251,7 +284,9 @@ async def _worker_once(payload, on_event=None, timeout=90):
                 if (not isinstance(event.get('message'), str) or not isinstance(event.get('code'), str)
                         or not isinstance(event.get('retryable', False), bool)):
                     raise protocol_error()
-                raise MediaError(event.get('code', 'source_failed'), event['message'], event.get('retryable', False))
+                error = MediaError(event.get('code', 'source_failed'), event['message'], event.get('retryable', False))
+                error.diagnostic = {**last_request_failure, 'stage': context['stage'], 'route': context['route']}
+                raise error
             if event['event'] == 'result':
                 metadata = event.get('metadata')
                 valid = ((isinstance(metadata, dict) and isinstance(metadata.get('title'), str)
@@ -418,7 +453,7 @@ async def analyze(body: AnalyzeInput):
         raise HTTPException(504, 'Kaynak zamanında yanıt vermedi. Tekrar dene.') from None
     except Exception as exc:
         error = describe_error(exc)
-        if error.code == 'source_failed':
+        if error.code == 'source_failed' and not getattr(error, 'diagnostic', None):
             error.message = 'Sayfadan video bilgileri alınamadı. Kaynak çözümleme hatasının nedeni henüz belirlenemedi.'
             if not gateway.configured:
                 error.message += ' Otomatik Proton VPN de henüz yapılandırılmamış.'

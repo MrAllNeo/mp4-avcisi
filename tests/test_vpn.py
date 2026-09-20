@@ -194,9 +194,12 @@ def test_failed_vpn_attempt_is_not_retried_directly(monkeypatch):
         calls.append(payload)
         raise MediaError('network', 'Safe error')
     monkeypatch.setattr(main, '_worker_once', attempt)
-    with pytest.raises(MediaError):
+    with pytest.raises(MediaError) as caught:
         asyncio.run(main.worker({'mode': 'download'}))
     assert len(calls) == 2 and gateway.entered == gateway.exited == 1
+    assert caught.value.diagnostic['route'] == 'proton' and caught.value.diagnostic['attempt'] == 2
+    assert 'Proton VPN üzerinden' in caught.value.message
+    assert calls[0]['request_id'] == calls[1]['request_id'] == caught.value.diagnostic['request_id']
 
 
 def test_known_vpn_route_skips_direct_attempt(monkeypatch):
