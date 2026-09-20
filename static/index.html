@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f5ef">
+  <meta name="description" content="Video bağlantısını analiz et, kaliteni seç, MP4 olarak indir. MP4 Avcısı ile herkese açık video kaynaklarını keşfet.">
+  <title>TOYWES · MP4 Avcısı — Bağlantıdan videoya.</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="header">
+      <a class="brand" href="/" aria-label="MP4 Avcısı ana sayfa"><span class="brand-icon" aria-hidden="true">↘</span>mp4<span class="brand-light">avcısı</span><span class="beta">BETA</span></a>
+      <nav aria-label="Ana menü"><a href="#downloads">İndirmelerim <span aria-hidden="true">↓</span></a><a href="#how">Nasıl çalışır <span aria-hidden="true">↗</span></a><a href="#questions">Merak ettiklerin <span aria-hidden="true">↗</span></a></nav>
+      <span class="local-tag" title="Toplum Yararına Web Siteleri"><span></span> TOYWES / YEREL</span>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="eyebrow"><span class="tiny-cross" aria-hidden="true">✳</span> İYİ VİDEOLAR, ELİNİN ALTINDA.</div>
+        <h1 id="hero-title">Bağlantıyı bırak.<br>Videoyu <span class="headline-mark">yanına al.<svg viewBox="0 0 460 20" preserveAspectRatio="none" aria-hidden="true"><path d="M4 13 Q225 -3 456 10 M30 18 Q205 4 420 15"/></svg></span></h1>
+        <p class="hero-copy">Bir bağlantı. Birkaç saniyelik keşif. İndirmeye hazır bir MP4.<br>Video ister doğrudan bağlantıda, ister sayfanın içinde olsun.</p>
+
+        <div class="tool-card">
+          <div class="card-top"><span><span class="live-dot"></span> VİDEO BULUCU</span><span class="mono">01 / BAĞLANTI</span></div>
+          <form id="analyze-form">
+            <label for="url">Videonun olduğu bağlantı</label>
+            <div class="input-row"><span class="link-icon" aria-hidden="true">↗</span><input id="url" name="url" type="url" placeholder="https://ornek.com/izlemek-istedigin-video" required autocomplete="url" spellcheck="false" maxlength="4096"><button class="primary" id="analyze-button" type="submit">Videoyu bul <span aria-hidden="true">↗</span></button></div>
+          </form>
+          <div class="card-bottom"><span>MP4 · Gömülü video · HLS / DASH</span><button class="text-button" id="example-button" type="button">Örnekle dene <span aria-hidden="true">↗</span></button></div>
+          <p class="error" id="error" role="alert" hidden></p>
+
+          <section id="result" class="result" aria-label="Bulunan video" hidden>
+            <div class="video-info"><div class="video-icon" aria-hidden="true">▷</div><div><span class="eyebrow small">VİDEO BULUNDU</span><h2 id="video-title"></h2><p id="video-meta"></p></div><span class="file-badge">MP4</span></div>
+            <div class="download-controls"><label for="quality">Video kalitesi<select id="quality"><option value="">En iyi kalite</option></select></label><button id="download-button" class="primary" type="button">Kuyruğa ekle <span aria-hidden="true">↓</span></button></div>
+            <p class="result-note">Seçtiğin çözünürlüğü aşmayan en iyi kaynak hazırlanır. İndirme sürerken başka bağlantı ekleyebilirsin.</p>
+          </section>
+          <p id="added-notice" class="added-notice" role="status" hidden>İşlem kuyruğa eklendi. <a href="#downloads">İndirmelerime git ↓</a></p>
+        </div>
+        <div class="under-card"><span><span aria-hidden="true">✓</span> Üyelik yok</span><span><span aria-hidden="true">✓</span> Sade, doğrudan indirme</span><span><span aria-hidden="true">✓</span> Senin seçtiğin kalite</span></div>
+
+        <div class="orbit orbit-left" aria-hidden="true"><div class="orbit-circle"><span>↗</span></div><span class="orbit-label">LINK IN</span><svg viewBox="0 0 110 60"><path d="M1 10 Q75 -10 75 35 L98 35 M90 27 L98 35 L90 43"/></svg></div>
+        <div class="orbit orbit-right" aria-hidden="true"><div class="file-art"><div class="file-fold"></div><span>▶</span><b>.mp4</b></div><span class="orbit-label">VIDEO OUT</span><span class="spark">✳</span></div>
+      </section>
+
+      <section class="downloads-section" id="downloads" aria-labelledby="downloads-title">
+        <div class="section-heading"><div><span class="eyebrow small">HER İŞLEM, TEK YERDE.</span><h2 id="downloads-title">İndirmelerim <span id="job-count" class="count-badge">0</span></h2></div><button id="refresh-jobs" class="text-button" type="button">Listeyi yenile ↻</button></div>
+        <p class="queue-description">Aynı anda 2 video hazırlanır; diğerleri sırayla başlar. Bu cihazdaki yerel liste, sayfayı kapatsan da saklanır.</p>
+        <p id="queue-notice" role="status" class="queue-notice" hidden></p>
+        <p id="queue-error" role="alert" class="error" hidden></p>
+        <div id="jobs-empty" class="jobs-empty"><span aria-hidden="true">↓</span><div><h3>İlk videona yer açtık.</h3><p>Bir bağlantı analiz et ve kuyruğa ekle. İşlemlerin burada görünecek.</p></div></div>
+        <div id="jobs-list" class="jobs-list" aria-label="Video işlemleri"></div>
+        <p class="retention-note">Tamamlanan, duraklatılan ve başarısız işler son durum değişiminden 1 saat sonra silinir. “Sil” ile dosyayı ve kaydını hemen kaldırabilirsin.</p>
+      </section>
+
+      <section class="process-section" id="how" aria-labelledby="how-title">
+        <div class="section-heading"><div><span class="eyebrow small">KARMAŞIK İŞLER, BASİT ADIMLAR.</span><h2 id="how-title">Üç adım. Hepsi bu.</h2></div><span class="hand-note">Gerisi bizde. ↙</span></div>
+        <div class="steps"><article><div class="step-top"><span class="step-number">01</span><span class="step-symbol" aria-hidden="true">↗</span></div><h3>Bağlantıyı yapıştır.</h3><p>Video dosyasının ya da videonun bulunduğu herkese açık sayfanın adresini ekle.</p></article><article><div class="step-top"><span class="step-number">02</span><span class="step-symbol scan-symbol" aria-hidden="true">⌖</span></div><h3>Kaynağı keşfedelim.</h3><p>Desteklenen oynatıcılardaki videoyu bulalım. Mevcut kaliteler arasından seçimini yap.</p></article><article><div class="step-top"><span class="step-number">03</span><span class="step-symbol" aria-hidden="true">↓</span></div><h3>MP4’ünü yanına al.</h3><p>Gerekirse ses ve görüntüyü birleştirelim. Hazır olan dosyayı tek tıkla cihazına kaydet.</p></article></div>
+      </section>
+
+      <section class="support-strip"><div class="support-icon" aria-hidden="true">✳</div><div><h2>Görünenin biraz daha ötesine.</h2><p>Doğrudan dosyalar, desteklenen gömülü oynatıcılar ve korumasız akışlar.</p></div><span class="outline-pill">KAYNAKTAN MP4’E ↗</span></section>
+
+      <section class="faq-section" id="questions" aria-labelledby="faq-title"><div><span class="eyebrow small">AKLINDA KALMASIN.</span><h2 id="faq-title">Küçük sorular,<br>net cevaplar.</h2></div><div class="faqs"><details><summary>Her bağlantıdan video indirebilir miyim?<span aria-hidden="true">+</span></summary><p>Her site aynı şekilde çalışmaz. Doğrudan video bağlantıları ve desteklenen herkese açık sayfalar analiz edilir. DRM koruması, giriş zorunluluğu, bot engelleri veya desteklenmeyen oynatıcılar indirmeyi engelleyebilir.</p></details><details><summary>Sayfaya gömülü videolar da bulunur mu?<span aria-hidden="true">+</span></summary><p>Desteklenen oynatıcılarda evet. Sayfa ve oynatıcı bilgileri incelenir; erişilebilir MP4, HLS veya DASH kaynakları aranır. Yalnızca JavaScript çalıştıktan sonra beliren bazı kaynaklar bu sürümde bulunamayabilir.</p></details><details><summary>Duraklattığım indirme kaldığı yerden devam eder mi?<span aria-hidden="true">+</span></summary><p>Kısmi dosyalar saklanır. Kaynak kaldığı yerden indirmeyi destekliyorsa bu dosyalar kullanılır; desteklemiyorsa ilgili parça yeniden indirilir. Süresi dolmuş bağlantıları yeniden analiz etmen gerekebilir. Sunucu yeniden başlatılırsa işler duraklatılır; “Devam et” ile yeniden başlatabilirsin.</p></details><details><summary>İndirme sınırı ve dosyaların ömrü ne kadar?<span aria-hidden="true">+</span></summary><p>En fazla 500 MB ve 2 saatlik videolar hazırlanır. Aynı anda iki video işlenir; çalışanlar dahil 10 iş sıraya alınabilir. Listede en fazla 20 kayıt saklanır. Tamamlanan, duraklatılan ve başarısız işler son durum değişiminden 1 saat sonra temizlenir. Canlı yayınlar desteklenmez.</p></details><details><summary>Hangi videoları indirebilirim?<span aria-hidden="true">+</span></summary><p>Kendi videolarını veya indirme iznin olan içerikleri kullan. Araç erişim kontrollerini ya da DRM korumasını kaldırmaz.</p></details></div></section>
+    </main>
+    <footer><a href="/" class="brand footer-brand"><span class="brand-icon" aria-hidden="true">↘</span>mp4<span class="brand-light">avcısı</span></a><p>TOYWES · Toplum Yararına Web Siteleri</p><span class="mono">AZ TIKLAMA, ÇOK VİDEO. ↗</span></footer>
+  </div>
+</body>
+</html>
