@@ -20,6 +20,7 @@ logger.propagate = False
 logger.addHandler(logging.NullHandler())
 
 CHOICES = {
+    'route': {'direct', 'proton'},
     'stage': {'startup', 'extract', 'download', 'probe', 'remux', 'transcode', 'finalize', 'storage'},
     'mode': {'analyze', 'download'},
     'status': {'queued', 'processing', 'paused', 'cancelled', 'complete', 'error'},
@@ -33,7 +34,8 @@ EVENTS = set('server_started server_stopped job_queued job_started job_finished 
              'job_expired job_task_failed storage_failed cleanup_failed worker_started '
              'worker_finished worker_failed worker_cancelled worker_stderr worker_protocol_error '
              'stage_started progress size_limit source_warning source_error ffmpeg_finished '
-             'ffmpeg_failed legacy_failure'.split())
+             'ffmpeg_failed legacy_failure vpn_starting vpn_connected vpn_stopped '
+             'vpn_cleanup_failed vpn_fallback vpn_unconfigured'.split())
 
 
 class PrivateRotatingHandler(RotatingFileHandler):

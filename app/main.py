@@ -20,6 +20,7 @@ from app.errors import MediaError, describe_error
 from app import diagnostics
 from app.jobstore import ACTIVE, TTL, Job, JobStore
 from app.network import validate_url
+from app.vpn import ProtonGateway, can_retry_via_vpn
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / '.data'
@@ -33,6 +34,7 @@ analyses = {}
 tasks = {}
 stop_reasons = {}
 changing = set()
+gateway = ProtonGateway(DATA / 'proton')
 
 
 def save(job):
@@ -80,7 +82,8 @@ async def reap():
 
 @asynccontextmanager
 async def lifespan(app):
-    global slots, analysis_slots
+    global slots, analysis_slots, gateway
+    gateway = ProtonGateway(DATA / 'proton')
     diagnostics.configure(DATA / 'logs')
     slots, analysis_slots = asyncio.Semaphore(2), asyncio.Semaphore(1)
     jobs.clear()
@@ -102,6 +105,8 @@ async def lifespan(app):
     for key, _ in pending:
         if jobs[key].status in ACTIVE:
             finish(jobs[key], 'paused', 'Sunucu kapatıldı. İndirmeye devam edebilirsin.', 'interrupted', True)
+    if gateway.state not in {'idle'}:
+        await gateway.stop()
     diagnostics.record('server_stopped')
 
 
@@ -150,8 +155,44 @@ class DownloadInput(BaseModel):
 
 
 async def worker(payload, on_event=None, timeout=90):
+    try:
+        return await _routed_worker(payload, on_event, timeout)
+    except TimeoutError:
+        diagnostics.record('worker_failed', job_id=payload.get('job_id'), mode=payload['mode'],
+                           code='timeout', retryable=True)
+        raise
+
+
+async def _routed_worker(payload, on_event=None, timeout=90):
+    # A single deadline covers the direct attempt, gateway startup and VPN retry.
+    # Credentials are internal-only and reach the child via stdin, never argv.
+    async with asyncio.timeout(timeout):
+        if payload.get('route') != 'proton':
+            try:
+                direct_budget = min(timeout, 35) if payload['mode'] == 'analyze' and gateway.configured else timeout
+                result = await _worker_once(payload, on_event, timeout=direct_budget)
+                return {**result, 'route': 'direct'}
+            except Exception as exc:
+                error = describe_error(exc)
+                error.operation_stage = getattr(exc, 'operation_stage', 'download')
+                if not can_retry_via_vpn(error):
+                    raise
+                if not gateway.configured:
+                    diagnostics.record('vpn_unconfigured', job_id=payload.get('job_id'), code=error.code)
+                    raise
+                diagnostics.record('vpn_fallback', job_id=payload.get('job_id'), code=error.code, route='proton')
+        elif not gateway.configured:
+            raise MediaError('vpn_config', 'Bu işlem Proton VPN gerektiriyor. Sunucunun VPN ayarlarını kontrol et.', True)
+        if on_event:
+            on_event({'event': 'progress', 'message': 'Proton VPN bağlantısı hazırlanıyor…', 'percent': None, 'route': 'proton'})
+        async with gateway.connection() as proxy:
+            result = await _worker_once({**payload, 'vpn_proxy': proxy, 'route': 'proton'}, on_event, timeout=timeout)
+            return {**result, 'route': 'proton'}
+
+
+async def _worker_once(payload, on_event=None, timeout=90):
     context = {'operation_id': uuid4().hex, 'job_id': payload.get('job_id'),
-               'mode': payload['mode'], 'stage': 'startup'}
+               'mode': payload['mode'], 'stage': 'startup', 'route': payload.get('route', 'direct')}
     started = time.monotonic()
     diagnostics.record('worker_started', **context, timeout_seconds=timeout, height=payload.get('height'))
     try:
@@ -262,6 +303,7 @@ async def worker(payload, on_event=None, timeout=90):
         diagnostics.record('worker_cancelled', **context)
         raise
     except Exception as exc:
+        exc.operation_stage = context['stage']
         error = describe_error(exc)
         diagnostics.record('worker_failed', **context, code=error.code, retryable=error.retryable,
                            elapsed_ms=round((time.monotonic() - started) * 1000), exc=exc)
@@ -298,12 +340,14 @@ async def download(job):
                 if data['event'] == 'progress':
                     job.message = data['message']
                     job.percent = data.get('percent')
+                    job.route = data.get('route', job.route)
                     if time.monotonic() - last_saved >= 2:
                         save(job)
                         last_saved = time.monotonic()
 
             result = await worker({'mode': 'download', 'url': job.url, 'height': job.height,
-                                   'directory': str(directory), 'job_id': job.id}, event, timeout=900)
+                                   'directory': str(directory), 'job_id': job.id, 'route': job.route}, event, timeout=900)
+            job.route = result.get('route', job.route)
             job.percent, job.size = 100, result['size']
             finish(job, 'complete', 'MP4 dosyan hazır.')
     except asyncio.CancelledError:
@@ -376,8 +420,9 @@ async def analyze(body: AnalyzeInput):
     except Exception as exc:
         raise describe_error(exc) from None
     key = uuid4().hex
-    analyses[key] = {'url': body.url, 'metadata': result['metadata'], 'created': time.time()}
-    return {'id': key, **result['metadata']}
+    route = result.get('route', 'direct')
+    analyses[key] = {'url': body.url, 'metadata': result['metadata'], 'created': time.time(), 'route': route}
+    return {'id': key, **result['metadata'], 'route': route}
 
 
 @app.post('/api/downloads', status_code=202)
@@ -395,6 +440,7 @@ async def create_download(body: DownloadInput):
     if len(jobs) >= MAX_JOBS:
         raise HTTPException(429, 'İşlem listesi dolu. Eski işlemlerden birini silip yeniden dene.')
     job = Job(uuid4().hex, entry['url'], entry['metadata']['title'], body.height)
+    job.route = entry.get('route', 'direct')
     jobs[job.id] = job
     start_job(job)
     return public_job(job)
@@ -496,6 +542,11 @@ async def download_file(key: str):
 @app.get('/api/health')
 async def health():
     return {'status': 'ok'}
+
+
+@app.get('/api/network')
+async def network_status():
+    return gateway.public()
 
 
 app.mount('/', StaticFiles(directory=ROOT / 'static', html=True), name='static')

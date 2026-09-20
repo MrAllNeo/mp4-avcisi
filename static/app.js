@@ -66,6 +66,7 @@ form.addEventListener('submit', async (event) => {
     analysis = await api('/api/analyze', { method: 'POST', body: JSON.stringify({ url: urlInput.value.trim() }) });
     $('#video-title').textContent = analysis.title;
     const meta = [analysis.source];
+    if (analysis.route === 'proton') meta.push('Proton VPN ile bulundu');
     if (analysis.duration) {
       const seconds = Math.round(analysis.duration);
       meta.push(`${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`);
@@ -127,7 +128,7 @@ function renderJob(job) {
   card.dataset.status = job.status;
   card.querySelector('h3').textContent = job.title;
   card.querySelector('.job-status').textContent = job.status === 'queued' ? `${labels.queued} · ${job.queue_position}` : labels[job.status];
-  card.querySelector('.job-meta').textContent = [job.height ? `${job.height}p'ye kadar` : 'En iyi kalite', formatBytes(job.size)].filter(Boolean).join(' · ');
+  card.querySelector('.job-meta').textContent = [job.height ? `${job.height}p'ye kadar` : 'En iyi kalite', formatBytes(job.size), job.route === 'proton' ? 'Proton VPN' : ''].filter(Boolean).join(' · ');
   card.querySelector('.job-message').textContent = job.message;
   const progress = card.querySelector('progress');
   progress.hidden = job.status !== 'processing';
@@ -228,3 +229,13 @@ $('#refresh-jobs').addEventListener('click', () => scheduleRefresh(0));
 window.addEventListener('online', () => scheduleRefresh(0));
 document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleRefresh(0); });
 refreshJobs();
+
+async function refreshNetworkStatus() {
+  try {
+    const status = await api('/api/network');
+    $('#network-note').dataset.ready = String(status.configured);
+    $('#network-label').textContent = status.configured ? 'Proton VPN · Gerektiğinde otomatik' : 'Doğrudan bağlantı';
+  } catch { /* Downloads remain usable when this optional status is unavailable. */ }
+}
+refreshNetworkStatus();
+window.addEventListener('focus', refreshNetworkStatus);

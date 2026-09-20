@@ -27,6 +27,7 @@ class Job:
     code: str | None = None
     retryable: bool = False
     expires_at: float | None = None
+    route: str = 'direct'
 
     def public(self):
         result = asdict(self)

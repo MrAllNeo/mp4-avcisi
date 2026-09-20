@@ -71,3 +71,25 @@ def test_job_cancel_stops_worker_and_removes_files(client, monkeypatch, tmp_path
     response = client.delete(f"/api/downloads/{key}")
     assert response.json()["status"] == "cancelled"
     assert not (tmp_path / key).exists()
+
+
+def test_vpn_analysis_route_is_carried_into_download(client, monkeypatch):
+    async def worker(payload, *args, **kwargs):
+        if payload['mode'] == 'analyze':
+            return {'metadata': {'title': 'VPN sample', 'qualities': [720]}, 'route': 'proton'}
+        assert payload['route'] == 'proton'
+        await asyncio.sleep(120)
+    monkeypatch.setattr(main, 'worker', worker)
+    analysis = client.post('/api/analyze', json={'url': 'https://example.com/video'}).json()
+    assert analysis['route'] == 'proton'
+    response = client.post('/api/downloads', json={'analysis_id': analysis['id'], 'height': 720})
+    assert response.status_code == 202
+    assert response.json()['route'] == 'proton'
+    client.delete('/api/downloads/' + response.json()['id'])
+
+
+def test_network_status_contains_only_public_state(client):
+    response = client.get('/api/network')
+    assert response.status_code == 200
+    assert response.json() == {'provider': 'proton', 'configured': False,
+                               'state': 'unconfigured', 'active_jobs': 0}

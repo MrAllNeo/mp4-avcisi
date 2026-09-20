@@ -33,9 +33,15 @@ def describe_error(error):
         return MediaError("private_network", "Yerel ağ bağlantıları desteklenmiyor. Herkese açık bir video bağlantısı gir.")
     if "drm" in text:
         return MediaError("protected", "Bu video korumalı olduğu için indirilemiyor.")
+    if "vpn bağlantısı" in text:
+        return MediaError("vpn_unavailable", "Proton VPN bağlantısı kurulamadı. Daha sonra yeniden dene.", True)
     if any(part in text for part in ("sign in", "log in", "login", "authentication", "http error 401")):
         return MediaError("authentication", "Bu kaynak giriş istiyor. Herkese açık bir bağlantı kullan.")
-    if any(part in text for part in ("http error 403", "forbidden", "captcha", "bot")):
+    if any(part in text for part in ("captcha", "confirm you're not a bot", "bot detection", "anti-bot")):
+        return MediaError("bot_blocked", "Kaynak doğrulama istiyor; otomatik indirmeye izin vermiyor.")
+    if any(part in text for part in ("not available in your country", "not available from your location", "geo-restricted", "geo restricted", "http error 451")):
+        return MediaError("geo_blocked", "Kaynak bu bölgeden erişime izin vermiyor.")
+    if any(part in text for part in ("http error 403", "forbidden")):
         return MediaError("access_denied", "Kaynak erişime izin vermedi. Bağlantının tarayıcında açıldığını kontrol et.")
     if any(part in text for part in ("http error 404", "http error 410", "not found", "removed")):
         return MediaError("not_found", "Video bulunamadı veya kaldırılmış. Güncel bağlantıyı kontrol et.")
@@ -43,7 +49,7 @@ def describe_error(error):
         return MediaError("rate_limited", "Kaynak çok fazla istek aldığı için bekletiyor. Biraz sonra yeniden dene.", True)
     if any(part in text for part in ("unsupported url", "no video", "no formats", "requested format is not available")):
         return MediaError("unsupported", "Bu bağlantıda desteklenen video bulunamadı. Doğrudan video veya başka bir kalite dene.")
-    if any(part in text for part in ("timed out", "timeout", "connection", "resolve", "network", "http error 5")):
+    if any(part in text for part in ("timed out", "timeout", "connection", "resolve", "network", "http error 5", "dns", "name or service not known", "name resolution")):
         return MediaError("network", "Kaynağa bağlantı kesildi. Kısmi dosyalar saklandı; yeniden deneyebilirsin.", True)
     # ValueError can also originate in third-party parsers and include secrets.
     if isinstance(error, ValueError) and str(error) in {

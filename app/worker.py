@@ -125,13 +125,16 @@ def run():
     import yt_dlp
     from yt_dlp.downloader.external import FFmpegFD
 
-    guard_network()
+    payload = json.loads(sys.stdin.readline())
+    if payload.get('vpn_proxy'):
+        guard_network(proxy=payload['vpn_proxy'])
+    else:
+        guard_network()
     # No subprocess may retrieve remote media outside the guarded Python sockets.
     def no_external_download(*args, **kwargs):
         raise MediaError("unsupported", "Bu akış türü henüz desteklenmiyor.")
     FFmpegFD.real_download = no_external_download
 
-    payload = json.loads(sys.stdin.readline())
     url = validate_url(payload["url"])
     mode = payload["mode"]
     directory = Path(payload.get("directory", ".")).resolve()

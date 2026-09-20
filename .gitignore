@@ -12,6 +12,8 @@ node_modules/
 *.pem
 *.key
 cookies*.txt
+*.conf
+!*.conf.example
 .coverage
 htmlcov/
 core
