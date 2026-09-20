@@ -1,10 +1,13 @@
 """Import a Proton WireGuard file locally without printing its contents."""
 import argparse
+import configparser
+import ipaddress
 import os
 from pathlib import Path
 import tempfile
 
 from app.vpn import validate_config
+from app.errors import MediaError
 
 
 def import_config(source, destination):
@@ -20,6 +23,21 @@ def import_config(source, destination):
         with os.fdopen(fd, 'wb') as stream:
             stream.write(data)
         validate_config(temporary)
+        # Proton exports dual-stack addresses. The isolated gateway uses the
+        # default IPv4 Docker bridge, so an IPv6 interface prevents startup.
+        # Normalize only our private copy; preserve the downloaded original.
+        config = configparser.ConfigParser(interpolation=None)
+        config.optionxform = str
+        config.read_string(temporary.read_text())
+        address_key = next(key for key in config['Interface'] if key.lower() == 'address')
+        addresses = [ipaddress.ip_interface(value.strip()) for value in config['Interface'][address_key].split(',')]
+        ipv4 = [str(address) for address in addresses if address.version == 4]
+        if not ipv4:
+            raise MediaError('vpn_config', 'Bu VPN bağlantısı IPv4 adresi içeren bir Proton yapılandırması gerektiriyor.')
+        if len(ipv4) != len(addresses):
+            config['Interface'][address_key] = ', '.join(ipv4)
+            with temporary.open('w') as stream:
+                config.write(stream)
         os.replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)

@@ -93,3 +93,15 @@ def test_network_status_contains_only_public_state(client):
     assert response.status_code == 200
     assert response.json() == {'provider': 'proton', 'configured': False,
                                'state': 'unconfigured', 'active_jobs': 0}
+
+
+def test_unknown_analysis_error_explains_stage_and_missing_vpn(client, monkeypatch):
+    async def worker(*args, **kwargs):
+        raise RuntimeError('private-source-url')
+    monkeypatch.setattr(main, 'worker', worker)
+    response = client.post('/api/analyze', json={'url': 'https://example.com/video'})
+    assert response.status_code == 422
+    assert response.json()['code'] == 'source_failed'
+    assert 'video bilgileri' in response.json()['detail']
+    assert 'yapılandırılmamış' in response.json()['detail']
+    assert 'private-source-url' not in response.text

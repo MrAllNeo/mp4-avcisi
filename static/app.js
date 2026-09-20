@@ -7,6 +7,7 @@ let analysis = null;
 let refreshing = false;
 let refreshTimer;
 let failures = 0;
+let networkRefreshing = false;
 const pendingActions = new Set();
 const cards = new Map();
 const labels = { queued: 'Sırada', processing: 'Hazırlanıyor', paused: 'Duraklatıldı', complete: 'Hazır', error: 'Tamamlanamadı', cancelled: 'İptal edildi' };
@@ -62,6 +63,7 @@ form.addEventListener('submit', async (event) => {
   clearResult();
   busy(true);
   analyzeButton.textContent = 'Kaynak aranıyor…';
+  const networkTimer = setInterval(refreshNetworkStatus, 2000);
   try {
     analysis = await api('/api/analyze', { method: 'POST', body: JSON.stringify({ url: urlInput.value.trim() }) });
     $('#video-title').textContent = analysis.title;
@@ -80,6 +82,8 @@ form.addEventListener('submit', async (event) => {
   } catch (error) {
     message('#error', error.message);
   } finally {
+    clearInterval(networkTimer);
+    refreshNetworkStatus();
     busy(false);
     analyzeButton.textContent = 'Videoyu bul ↗';
   }
@@ -231,11 +235,18 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) sche
 refreshJobs();
 
 async function refreshNetworkStatus() {
+  if (networkRefreshing) return;
+  networkRefreshing = true;
   try {
     const status = await api('/api/network');
     $('#network-note').dataset.ready = String(status.configured);
-    $('#network-label').textContent = status.configured ? 'Proton VPN · Gerektiğinde otomatik' : 'Doğrudan bağlantı';
+    const labels = { starting: 'Proton VPN bağlanıyor…', connected: 'Proton VPN bağlantısı açık',
+      error: 'Proton VPN · Bağlantı hatası' };
+    $('#network-label').textContent = status.configured
+      ? (labels[status.state] || 'Proton VPN · Gerektiğinde otomatik')
+      : 'Otomatik VPN ayarlanmamış · Doğrudan bağlantı';
   } catch { /* Downloads remain usable when this optional status is unavailable. */ }
+  finally { networkRefreshing = false; }
 }
 refreshNetworkStatus();
 window.addEventListener('focus', refreshNetworkStatus);

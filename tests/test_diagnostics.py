@@ -48,3 +48,22 @@ def test_logging_write_failure_does_not_hide_original_error(tmp_path, monkeypatc
     stderr = capsys.readouterr().err
     assert 'Diagnostic log unavailable' in stderr
     assert 'secret' not in stderr
+
+
+def test_nested_http_status_is_logged_without_response_or_url(tmp_path):
+    from urllib.error import HTTPError
+    from yt_dlp.utils import DownloadError, ExtractorError
+    cause = HTTPError('https://example.com?token=secret', 403, 'secret-response', {'Cookie': 'secret'}, None)
+    inner = ExtractorError('secret-title', cause=cause)
+    outer = DownloadError('secret', exc_info=(type(inner), inner, None))
+    diagnostics.configure(tmp_path)
+    diagnostics.record('worker_failed', exc=outer)
+    raw = (tmp_path / 'events.jsonl').read_text()
+    causes = json.loads(raw)['causes']
+    assert any(c.get('exception_type') == 'HTTPError' and c.get('http_status') == 403 for c in causes)
+    assert 'secret' not in raw and 'https://' not in raw and 'Cookie' not in raw
+
+
+def test_cause_metadata_rejects_arbitrary_values():
+    safe = diagnostics.safe_fields({'causes': [{'exception_type': 'https://secret', 'http_status': 'secret', 'message': 'secret'}]})
+    assert safe == {'causes': [{}]}

@@ -179,7 +179,8 @@ async def _routed_worker(payload, on_event=None, timeout=90):
                     raise
                 if not gateway.configured:
                     diagnostics.record('vpn_unconfigured', job_id=payload.get('job_id'), code=error.code)
-                    raise
+                    error.message += ' Otomatik Proton VPN yapılandırılmadığı için alternatif bağlantı denenemedi.'
+                    raise error from None
                 diagnostics.record('vpn_fallback', job_id=payload.get('job_id'), code=error.code, route='proton')
         elif not gateway.configured:
             raise MediaError('vpn_config', 'Bu işlem Proton VPN gerektiriyor. Sunucunun VPN ayarlarını kontrol et.', True)
@@ -415,10 +416,13 @@ async def analyze(body: AnalyzeInput):
             result = await worker({'mode': 'analyze', 'url': body.url})
     except TimeoutError:
         raise HTTPException(504, 'Kaynak zamanında yanıt vermedi. Tekrar dene.') from None
-    except MediaError:
-        raise
     except Exception as exc:
-        raise describe_error(exc) from None
+        error = describe_error(exc)
+        if error.code == 'source_failed':
+            error.message = 'Sayfadan video bilgileri alınamadı. Kaynak çözümleme hatasının nedeni henüz belirlenemedi.'
+            if not gateway.configured:
+                error.message += ' Otomatik Proton VPN de henüz yapılandırılmamış.'
+        raise error from None
     key = uuid4().hex
     route = result.get('route', 'direct')
     analyses[key] = {'url': body.url, 'metadata': result['metadata'], 'created': time.time(), 'route': route}

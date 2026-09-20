@@ -36,3 +36,42 @@ def test_internal_errors_are_classified_without_raw_messages(error, code, retrya
     result = describe_error(error)
     assert result.code == code and result.retryable is retryable
     assert 'secret' not in result.message and 'https://' not in result.message
+
+
+def wrapped(cause):
+    from yt_dlp.utils import DownloadError, ExtractorError
+    inner = ExtractorError('Source failed at https://example.com?token=secret', cause=cause)
+    return DownloadError('Video lookup failed', exc_info=(type(inner), inner, None))
+
+
+def test_saved_ytdlp_http_cause_is_classified():
+    from urllib.error import HTTPError
+    error = wrapped(HTTPError('https://example.com?token=secret', 403, 'Denied', {}, None))
+    result = describe_error(error)
+    assert result.code == 'access_denied'
+    assert 'secret' not in result.message
+
+
+def test_parser_failure_has_distinct_code():
+    import json
+    assert describe_error(wrapped(json.JSONDecodeError('secret', 'secret', 0))).code == 'source_parse'
+    assert describe_error(Exception('Unable to extract video URL from secret')).code == 'source_parse'
+
+
+def test_nested_tls_error_is_distinct_and_does_not_disable_validation():
+    import ssl
+    assert describe_error(wrapped(ssl.SSLCertVerificationError('secret'))).code == 'tls_failed'
+
+
+def test_hidden_access_control_takes_priority_over_parser_failure():
+    from yt_dlp.utils import DownloadError
+    error = DownloadError('Unable to extract video', exc_info=(Exception, Exception('CAPTCHA required'), None))
+    assert describe_error(error).code == 'bot_blocked'
+
+
+def test_exception_cycles_are_bounded():
+    from app.errors import error_chain
+    error = Exception('secret')
+    error.__cause__ = error
+    assert list(error_chain(error)) == [error]
+    assert describe_error(error).code == 'source_failed'

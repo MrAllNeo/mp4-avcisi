@@ -14,6 +14,8 @@ import re
 import sys
 import traceback
 
+from app.errors import error_chain, http_status
+
 logger = logging.getLogger('mp4.diagnostics')
 logger.setLevel(logging.INFO)
 logger.propagate = False
@@ -67,6 +69,8 @@ def exception_fields(exc):
     return {
         'exception_type': type(exc).__name__,
         'errno': getattr(exc, 'errno', None),
+        'causes': [{'exception_type': type(cause).__name__, 'http_status': http_status(cause)}
+                   for cause in error_chain(exc)],
         'stack': [{'file': Path(frame.filename).name, 'function': frame.name, 'line': frame.lineno}
                   for frame in traceback.extract_tb(exc.__traceback__)[-12:]],
     }
@@ -85,6 +89,12 @@ def safe_fields(fields):
             result[key] = value
         elif key == 'retryable' and isinstance(value, bool):
             result[key] = value
+        elif key == 'causes' and isinstance(value, list):
+            result[key] = [{k: v for k, v in cause.items()
+                            if (k == 'http_status' and type(v) is int and 400 <= v <= 599)
+                            or (k == 'exception_type' and isinstance(v, str)
+                                and re.fullmatch(r'[A-Za-z_]{1,64}', v))}
+                           for cause in value[:8] if isinstance(cause, dict)]
         elif key == 'stack' and isinstance(value, list):
             result[key] = [{k: v for k, v in frame.items()
                             if (k == 'line' and type(v) is int) or

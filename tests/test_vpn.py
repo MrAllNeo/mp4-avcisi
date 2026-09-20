@@ -40,6 +40,33 @@ def test_rejects_invalid_or_local_vpn_endpoint(tmp_path, replace):
     assert caught.value.code == 'vpn_config'
 
 
+def test_dual_stack_proton_import_uses_ipv4_and_preserves_original(tmp_path):
+    import configparser
+    source = tmp_path / 'proton.conf'
+    original = config_text().replace('10.2.0.2/32', '10.2.0.2/32, 2a07:b944::2:2/128')
+    source.write_text(original)
+    target = tmp_path / 'gateway/wg0.conf'
+    import_config(source, target)
+    config = configparser.ConfigParser()
+    config.read(target)
+    assert config['Interface']['Address'] == '10.2.0.2/32'
+    assert config['Interface']['PrivateKey'] == base64.b64encode(bytes(range(32))).decode()
+    assert source.read_text() == original
+    assert target.stat().st_mode & 0o777 == 0o600
+
+
+def test_ipv6_only_import_preserves_existing_config(tmp_path):
+    source = tmp_path / 'proton.conf'
+    target = tmp_path / 'gateway/wg0.conf'
+    source.write_text(config_text())
+    import_config(source, target)
+    previous = target.read_text()
+    source.write_text(config_text().replace('10.2.0.2/32', '2a07:b944::2:2/128'))
+    with pytest.raises(MediaError):
+        import_config(source, target)
+    assert target.read_text() == previous
+
+
 def test_simultaneous_jobs_share_tunnel_and_last_release_stops_it(tmp_path, monkeypatch):
     gateway = ProtonGateway(tmp_path)
     actions = []
@@ -114,7 +141,7 @@ class FakeGateway:
             self.exited += 1
 
 
-@pytest.mark.parametrize('code', ['geo_blocked', 'access_denied', 'network', 'timeout'])
+@pytest.mark.parametrize('code', ['geo_blocked', 'access_denied', 'network', 'timeout', 'source_parse', 'tls_failed'])
 def test_retry_once_via_vpn_and_release(monkeypatch, code):
     gateway = FakeGateway()
     monkeypatch.setattr(main, 'gateway', gateway)
@@ -193,6 +220,24 @@ def test_unconfigured_vpn_preserves_original_error(monkeypatch):
     with pytest.raises(MediaError) as caught:
         asyncio.run(main.worker({'mode': 'analyze'}))
     assert caught.value.code == 'geo_blocked' and gateway.entered == 0
+    assert 'yapılandırılmadığı' in caught.value.message
+
+
+def test_analysis_parser_failure_retries_during_first_step(monkeypatch):
+    gateway = FakeGateway()
+    monkeypatch.setattr(main, 'gateway', gateway)
+    calls = []
+    async def attempt(payload, *args, **kwargs):
+        calls.append(payload)
+        if len(calls) == 1:
+            error = MediaError('source_parse', 'Unable to parse')
+            error.operation_stage = 'extract'
+            raise error
+        return {'metadata': {'title': 'test', 'qualities': []}}
+    monkeypatch.setattr(main, '_worker_once', attempt)
+    result = asyncio.run(main.worker({'mode': 'analyze'}))
+    assert result['route'] == 'proton'
+    assert len(calls) == 2 and gateway.entered == gateway.exited == 1
 
 
 @pytest.mark.parametrize('text,code', [

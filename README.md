@@ -81,6 +81,8 @@ grep 'İŞ_KİMLİĞİ' .data/logs/events.jsonl*
 
 Hata yığınında yalnız kod dosyası, fonksiyon ve satır numarası bulunur; istisna metni, yerel değişkenler, kaynak URL'si, başlık, cookie, token veya sunucu yanıtı yazılmaz. Worker stderr'i bellekte en fazla son 16 KiB tutularak sınıflandırılır. Log dosyası 2 MiB'de döndürülür ve üç yedek saklanır (yaklaşık 8 MiB toplam); dizin 0700, dosyalar 0600 izinlidir. Logların tek yazıcısı API sürecidir. İşlerin bir saatlik temizliği logları silmez; loglar boyut sınırıyla döner.
 
+`worker_failed.causes`, yt-dlp'nin `exc_info`/`cause` alanları dahil en fazla sekiz bağlı istisnanın türünü ve varsa HTTP hata kodunu tutar. Ham hata metni kaydedilmez. `source_parse` sayfa yanıtının çözümlenemediğini, `tls_failed` güvenli bağlantı sorununu ayırır. Geçmişte yalnız `source_failed` olarak yazılmış kayıtların asıl nedeni geriye dönük çıkarılamaz; aynı kaynak yeniden denenmelidir.
+
 HTTP erişim logu yalnız isteğin kabulünü gösterir: indirmeye verilen `202`, dosyanın tamamlandığı anlamına gelmez. Ayrıntılı loglama eklenmeden önceki hatalarda kesin boyut ve aşama geriye dönük belirlenemez.
 
 Canlı siteler zamanla değiştiği için bu testler belirli bir sitenin her zaman çalışacağı anlamına gelmez. Gerçek kaynak denemeleri ayrıca yapılmalıdır.
@@ -108,19 +110,23 @@ Bu entegrasyon Linux üzerinde yerel Docker Engine ve `/dev/net/tun` kullanır. 
 
 Dosya doğrulanarak `.data/proton/wg0.conf` konumuna 0600 izinleriyle kaydedilir. Mevcut geçerli ayar, hatalı dosya içe aktarılırsa korunur. Dosya bulunmadığında uygulama normal bağlantıyla çalışır ve VPN başlatmaz. Dosya eklendikten sonra sonraki işlem otomatik kullanabilir; sunucuyu yeniden başlatmak gerekmez. Tamamen devre dışı bırakmak için sunucuyu `MP4_VPN_AUTO=0` ortam değişkeniyle başlat.
 
+Proton masaüstü uygulamasını kurmak veya elle açmak bu yapılandırmanın yerini almaz. Arayüzde “Otomatik VPN ayarlanmamış” görünüyorsa uygulama kendi tünelini açamaz. Uygun erişim hatalarında logdaki `vpn_unconfigured` kaydı ve kullanıcıya gösterilen mesaj bu eksikliği belirtir.
+
+Bu sürümün VPN ağ geçidi Docker'ın IPv4 köprüsünü kullanır. Proton'un çift adresli dosyası içe aktarılırken yalnız uygulamaya ait kopyadaki `Interface.Address` IPv4 ile sınırlandırılır; indirdiğin özgün dosya değiştirilmez. Böylece IPv6 desteği kapalı Docker ortamlarında Gluetun'un başlangıçta kapanması önlenir. Yalnız IPv6 adresi içeren yapılandırmalar kabul edilmez.
+
 ```bash
 MP4_VPN_AUTO=0 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 ### İşlem davranışı
 
-- Önce doğrudan bağlantı denenir. Bölge engeli, genel HTTP 403 veya ağ bağlantısı sorunu uygun olduğunda **bir kez** Proton üzerinden denenir. Her 403 ülke engeli anlamına gelmez. CAPTCHA/bot doğrulaması, giriş, 429, DRM, bulunamayan dosya ve boyut sınırı VPN'i tetiklemez. Dönüştürme aşamasının zaman aşımı da VPN'i başlatmaz.
+- Önce doğrudan bağlantı denenir. Bölge engeli, genel HTTP 403, ağ/TLS bağlantısı veya sayfa ayrıştırma sorunu uygun olduğunda **bir kez** Proton üzerinden denenir. Bu davranış ilk URL analizi için de geçerlidir; TLS doğrulaması kapatılmaz. Her 403 veya ayrıştırma sorunu ülke engeli anlamına gelmez. CAPTCHA/bot doğrulaması, giriş, 429, DRM, bulunamayan dosya ve boyut sınırı VPN'i tetiklemez. Dönüştürme aşamasının zaman aşımı da VPN'i başlatmaz.
 - Doğrudan analiz, VPN yapılandırılmışsa 35 saniye ile sınırlanır; kalan analiz bütçesi VPN açılışı ve ikinci denemeye ayrılır. Toplam analiz bütçesi 90 saniye, indirme bütçesi 15 dakikadır. Temizlik için ayrıca sınırlı süre gerekebilir.
 - VPN'de bulunan kaynağın indirmesi ve devam ettirilmesi yine VPN'den yapılır. VPN denemesi başarısızsa sessizce doğrudan bağlantıya dönülmez. API/arayüzde `route: proton` görünür; adres, parola ve anahtar görünmez.
 - İlk ihtiyaçta projeye özel konteyner açılır ve sağlıklı olması beklenir. Eşzamanlı işler tek bağlantıyı paylaşır. Son iş başarıyla bittiğinde, hata aldığında, duraklatıldığında veya iptal edildiğinde konteyner kaldırılır. Bir işin bitmesi diğerinin tünelini kapatmaz.
 - Gluetun güvenlik duvarı açık kalır. Proxy yalnız `127.0.0.1:18989` üzerinde yayımlanır ve her başlangıçta yeni parola alır. Parola özel bir geçici dosyadan konteynere, stdin üzerinden worker'a iletilir; işlem argümanlarına yazılmaz.
 - VPN modunda DNS sorguları da tünelin içinden [Cloudflare DoH](https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-https/make-api-requests/dns-json/) ile yapılır. TLS doğrulanır, genel IP'ler kontrol edilir ve HTTP CONNECT hedefi doğrulanan sayısal IP'ye sabitlenir. Özel ağ/metadata IP'leri, yönlendirmeler ve karışık DNS yanıtları VPN'de de engellenir. Yerel DNS'e veya doğrudan ağa sessiz geri dönüş yapılmaz.
-- Kaynak bir engel sayfasını HTTP 200 ile döndürürse bunu güvenilir şekilde ülke engeli olarak tanımak mümkün olmayabilir. Böyle durumlarda otomatik deneme tetiklenmeyebilir.
+- Kaynak bir engel sayfasını HTTP 200 ile döndürürse bunu güvenilir şekilde ülke engeli olarak tanımak mümkün olmayabilir. Bu yanıt `source_parse` hatasına yol açarsa alternatif bağlantı denenir; genel `source_failed` veya `unsupported` hataları otomatik VPN'i tetiklemez.
 - Süreç zorla öldürülürse konteyner kalabilir; bir sonraki VPN başlangıcı yalnız aynı projeye ait etiketli eski konteyneri temizler. Normal sunucu kapanışında aktif işler ve bağlantı kapatılır. Konteynerin durdurulması başarısız olursa `vpn_cleanup_failed` loglanır; işletici Docker durumunu kontrol etmelidir.
 
 `GET /api/network`, yapılandırmanın varlığını, bağlantı durumunu ve kullanan iş sayısını gösterir. `configured: true` dosyanın var olduğu anlamına gelir; canlı bağlantı ancak ilk kullanımda sağlık kontrolünden sonra doğrulanır. Anahtar/token döndürmez. Loglarda `vpn_starting`, `vpn_connected`, `vpn_fallback`, `vpn_stopped` ve başarısız temizlik olayları bulunur.

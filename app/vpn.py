@@ -14,7 +14,7 @@ from app.errors import MediaError
 
 IMAGE = 'qmcgaw/gluetun:v3.41.3'
 PROXY_PORT = 18989
-FALLBACK_CODES = {'geo_blocked', 'access_denied', 'network', 'timeout'}
+FALLBACK_CODES = {'geo_blocked', 'access_denied', 'network', 'timeout', 'tls_failed', 'source_parse'}
 
 
 def can_retry_via_vpn(error):
@@ -32,7 +32,8 @@ def validate_config(path):
         for section, key in [('Interface', 'PrivateKey'), ('Peer', 'PublicKey')]:
             if len(base64.b64decode(config[section][key], validate=True)) != 32:
                 raise ValueError
-        ipaddress.ip_interface(config['Interface']['Address'].split(',')[0].strip())
+        for value in config['Interface']['Address'].split(','):
+            ipaddress.ip_interface(value.strip())
         endpoint, port = config['Peer']['Endpoint'].rsplit(':', 1)
         if not ipaddress.ip_address(endpoint.strip('[]')).is_global or not 1 <= int(port) <= 65535:
             raise ValueError
@@ -112,7 +113,8 @@ class ProtonGateway:
             '--env', 'FIREWALL=on', '--log-driver=none', IMAGE)
         async with asyncio.timeout(45):
             while True:
-                status = await self.docker('inspect', '--format', '{{.State.Health.Status}}', self.name)
+                status = await self.docker('inspect', '--format',
+                    '{{if .State.Running}}{{.State.Health.Status}}{{else}}exited{{end}}', self.name)
                 if status == 'healthy':
                     break
                 if status not in {'starting', 'unhealthy'}:
