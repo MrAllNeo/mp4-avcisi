@@ -46,7 +46,7 @@ Doğrudan MP4, yt-dlp'nin desteklediği site/oynatıcılar ve yerel indiriciyle 
 - Bu sürüm tek kullanıcı için **localhost** üzerinde çalışır; internete açık bir hizmet olarak yayımlanmamıştır. Host kontrolü localhost ile sınırlıdır.
 - Geçici uzaktan testlerde `MP4_ALLOWED_HOSTS` ile host listesi, `MP4_ACCESS_USER` ve `MP4_ACCESS_PASSWORD` ile HTTP Basic giriş zorunluluğu ayarlanabilir. `/api/health` sağlık kontrolü için açık kalır.
 - DRM, giriş isteyen kaynaklar ve canlı yayınlar desteklenmez. JavaScript çalıştırarak ağ trafiği yakalama henüz eklenmemiştir. Bölgesel/ağ erişim hatalarında yapılandırılmış Proton VPN üzerinden bir alternatif deneme yapılabilir; giriş, CAPTCHA veya DRM kaldırılmaz.
-- Dosya başına 500 MB kaynak sınırı, 2 saat video süresi, eşzamanlı iki indirme ve kuyruk beklemesi hariç en fazla 15 dakika hazırlama süresi vardır. Çalışanlar dahil en fazla 10 iş sıraya alınır; toplam 20 kayıt saklanır. Analiz için ayrı bir işlem yuvası bulunur. Geçici işlem dosyalarına ayrıca disk sınırı uygulanır. Birleştirme/dönüşüm sonucunun boyutu kaynak boyutundan farklı olabilir.
+- Dosya başına varsayılan 2 GB kaynak sınırı, 2 saat video süresi, eşzamanlı iki indirme ve kuyruk beklemesi hariç en fazla 15 dakika hazırlama süresi vardır. Çalışanlar dahil en fazla 10 iş sıraya alınır; toplam 20 kayıt saklanır. Analiz için ayrı bir işlem yuvası bulunur. Kaynak sınırı `MP4_MAX_BYTES`, geçici işlem diski sınırı `MP4_MAX_DISK_BYTES` ile bayt cinsinden değiştirilebilir. Birleştirme/dönüşüm sonucunun boyutu kaynak boyutundan farklı olabilir.
 - Bitmiş, duraklatılmış, iptal edilmiş ve başarısız işler **son durum değişiminden bir saat sonra** temizlenir. Çalışan işin dosyası süre doldu diye silinmez. Temizleme her 60 saniyede ve API erişimlerinde yapılır.
 - İş kayıtları `.data/<id>.json` dosyalarında atomik olarak saklanır. Kaynak URL'si devam edebilmek için kayda yazılır; bu dosyalar yalnız işletim sistemindeki kullanıcı tarafından okunabilir (0600), `.data/` izinleri 0700'dür. API listesi kaynak URL'sini döndürmez. Analiz sonuçları bellektedir; sunucu yeniden başlatılınca yeni indirmeler için tekrar analiz gerekir.
 - Bu sürüm **tek Uvicorn worker** içindir. Yerel uygulamayı açan tarayıcılar aynı iş listesini görür; çok kullanıcılı hesap/oturum ayrımı yoktur.
@@ -77,7 +77,7 @@ tail -n 50 .data/logs/events.jsonl
 grep 'İŞ_KİMLİĞİ' .data/logs/events.jsonl*
 ```
 
-`size_limit` olayında `basis`, ölçümün indirilen bayt (`downloaded`), kesin toplam (`content_length`), tamamlanan kaynak (`source_file`) veya geçici dosyalar (`temporary_files`) olduğunu gösterir. `limit_bytes` kesin sınırı verir: arayüzdeki 500 MB, 524288000 bayt olarak uygulanır. `estimated_bytes` yalnız teşhis içindir.
+`size_limit` olayında `basis`, ölçümün indirilen bayt (`downloaded`), kesin toplam (`content_length`), tamamlanan kaynak (`source_file`) veya geçici dosyalar (`temporary_files`) olduğunu gösterir. `limit_bytes` yapılandırılmış kesin sınırı verir; varsayılan kaynak sınırı 2147483648 bayttır (2 GiB). `estimated_bytes` yalnız teşhis içindir.
 
 `stage_started` ve `ffmpeg_finished` olayları kaynak çözümleme, indirme, inceleme, MP4'e aktarım ve dönüşüm aşamalarını ayırır. FFmpeg çıkış kodu ve bilinen hata sınıfı kaydedilir; ham stderr kaydedilmez. `ffmpeg -i` incelemesinin çıkış kodu 1 olabilir; tek başına indirme başarısızlığı değildir. Sonuç için `job_finished.status` ve `job_failed.code` alanlarına bak.
 

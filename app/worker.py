@@ -15,7 +15,17 @@ from app.media import get_ffmpeg
 from app.errors import MediaError, describe_error
 from app.source_trace import trace_requests
 
-MAX_BYTES = 500 * 1024 * 1024
+DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024
+
+
+def configured_limit(name, default):
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+MAX_BYTES = configured_limit("MP4_MAX_BYTES", DEFAULT_MAX_BYTES)
 PLAN_FILE = "analysis.json"
 COOKIE_FILE = "session.cookies"
 BROWSER_DOMAINS = {
@@ -85,7 +95,9 @@ def stage(name):
 def check_size(size, basis, **fields):
     if size is not None and size > MAX_BYTES:
         diagnostic("size_limit", basis=basis, size=size, limit_bytes=MAX_BYTES, **fields)
-        raise MediaError("size_limit", "Kaynak dosyası 500 MB sınırını aşıyor. Daha düşük kalite seçip yeniden indir.")
+        gibibyte = 1024 * 1024 * 1024
+        label = f"{MAX_BYTES // gibibyte} GB" if MAX_BYTES % gibibyte == 0 else f"{MAX_BYTES // (1024 * 1024)} MB"
+        raise MediaError("size_limit", f"Kaynak dosyası {label} sınırını aşıyor. Daha düşük kalite seçip yeniden indir.")
 
 
 def make_progress_hook():
