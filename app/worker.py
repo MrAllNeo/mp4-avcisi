@@ -243,7 +243,7 @@ def run():
     # PornHub requests impersonation itself; XVideos benefits from a forced
     # browser TLS fingerprint on deployments that receive reduced HTML. Native
     # curl remains scoped to these known sites; other URLs keep the socket guard.
-    if mode == "analyze" and browser_site(url):
+    if browser_site(url):
         options["impersonate"] = ImpersonateTarget.from_str("chrome")
         if payload.get("vpn_proxy"):
             # Native curl does not use the Python socket shim. Explicitly route
@@ -279,18 +279,36 @@ def run():
     options["match_filter"] = match_filter
     stage("download")
     try:
-        with yt_dlp.YoutubeDL(options) as downloader:
-            trace_requests(downloader, url, diagnostic)
-            try:
-                plan = load_plan(directory)
-                if plan:
-                    diagnostic("analysis_reused", extractor=plan.get("extractor_key") or plan.get("extractor"))
-                    downloader.process_ie_result(plan, download=True)
-                else:
+        plan = load_plan(directory)
+        try:
+            with yt_dlp.YoutubeDL(options) as downloader:
+                trace_requests(downloader, url, diagnostic)
+                try:
+                    if plan:
+                        diagnostic("analysis_reused", extractor=plan.get("extractor_key") or plan.get("extractor"))
+                        downloader.process_ie_result(plan, download=True)
+                    else:
+                        downloader.extract_info(url, download=True)
+                except yt_dlp.utils.MaxDownloadsReached:
+                    # yt-dlp signals the one-video limit after a successful download too.
+                    pass
+        except yt_dlp.utils.DownloadError as exc:
+            code = describe_error(exc).code
+            if not plan or not browser_site(url) or code not in {"not_found", "access_denied"}:
+                raise
+            # PornHub/XVideos manifests and signed media URLs can become invalid
+            # immediately after analysis. Refresh once with the same private
+            # cookies and browser transport instead of claiming the video vanished.
+            diagnostic("analysis_refresh", code=code)
+            for partial in directory.glob("source.*"):
+                if partial.is_file() and not partial.is_symlink():
+                    partial.unlink(missing_ok=True)
+            with yt_dlp.YoutubeDL(options) as downloader:
+                trace_requests(downloader, url, diagnostic)
+                try:
                     downloader.extract_info(url, download=True)
-            except yt_dlp.utils.MaxDownloadsReached:
-                # yt-dlp signals the one-video limit after a successful download too.
-                pass
+                except yt_dlp.utils.MaxDownloadsReached:
+                    pass
     finally:
         secure_cookie_file(cookie_file)
     files = [p for p in directory.glob("source.*") if p.suffix not in {".part", ".ytdl", ".json"}]
