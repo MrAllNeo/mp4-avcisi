@@ -218,6 +218,14 @@ footer>.mono{display:none}
 .job-meta{font:10px monospace;color:#a9b89c;margin:15px 0 0}
 .job-message{font-size:12px;line-height:1.7;overflow-wrap:anywhere;margin:12px 0 17px;flex:1}
 .job-card progress{margin-bottom:15px}
+.job-debug{margin:0 0 15px;border:1px solid #3d503d;border-radius:8px;background:#0d1510;padding:12px;max-height:390px;overflow:auto;color:#c7d6bf}
+.debug-notice,.debug-empty{font-size:9px;line-height:1.6;color:#9daf91;margin:0 0 10px}
+.debug-event{border-top:1px solid #29372a;padding:10px 0}
+.debug-event:first-of-type{border-top:0}
+.debug-event strong{display:block;color:#b8ef83;font:9px monospace;margin-bottom:6px;overflow-wrap:anywhere}
+.debug-event pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;color:#c4cec0;font:9px/1.55 monospace}
+.debug-request_failed strong,.debug-worker_failed strong,.debug-job_failed strong,.debug-routing_failed strong{color:#ffad9c}
+.debug-analysis_refresh strong{color:#f2d58a}
 .job-bottom{display:flex;align-items:center;flex-wrap:wrap;gap:10px;border-top:1px solid #2b3a2c;padding-top:13px}
 .job-expiry{font-size:9px;color:#9daf91;flex:1;min-width:115px}
 .job-actions{display:flex;align-items:center;gap:16px}
