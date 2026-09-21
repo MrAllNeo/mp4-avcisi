@@ -24,6 +24,16 @@ def test_page_and_security_headers(client):
     assert client.get("/api/health", headers={"Host": "attacker.example"}).status_code == 400
 
 
+def test_optional_basic_auth_keeps_health_public(client, monkeypatch):
+    monkeypatch.setenv('MP4_ACCESS_USER', 'tester')
+    monkeypatch.setenv('MP4_ACCESS_PASSWORD', 'private-pass')
+    response = client.get('/')
+    assert response.status_code == 401
+    assert response.headers['www-authenticate'].startswith('Basic ')
+    assert client.get('/api/health').status_code == 200
+    assert client.get('/', auth=('tester', 'private-pass')).status_code == 200
+
+
 def test_invalid_url_and_cross_origin(client):
     assert client.post("/api/analyze", json={"url": "file:///etc/passwd"}).status_code == 422
     assert client.post("/api/analyze", json={"url": "https://example.com"}, headers={"Origin": "https://attacker.example"}).status_code == 403

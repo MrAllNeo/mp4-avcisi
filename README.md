@@ -2,7 +2,7 @@
 
 TOYWES (Toplum Yararına Web Siteleri) için video bağlantısını analiz eden, desteklenen herkese açık sayfalardaki gömülü kaynakları bulan ve MP4 dosyası hazırlayan yerel web uygulaması.
 
-Arayüz koyu tema kullanır. İsteğe bağlı Proton VPN bağlantısı, uygun erişim hatalarında otomatik devreye girer ve son kullanan işlem bittiğinde kapanır.
+Arayüz koyu tema kullanır. İsteğe bağlı Proton VPN bağlantısı, uygun erişim hatalarında otomatik devreye girer ve son kullanan işlem bittiğinde kapanır. PornHub ve XVideos analizlerinde yt-dlp'nin desteklediği Chrome TLS taklidi kullanılır; bunun için kilitli bağımlılıklarda `curl-cffi` bulunur.
 
 ## Çalıştırma
 
@@ -24,11 +24,12 @@ FFmpeg sistem PATH'inden, `FFMPEG_BINARY` ortam değişkenindeki tam yoldan veya
 
 1. FastAPI, bağlantıyı ayrı ve zaman sınırlı bir Python sürecinde yt-dlp ile analiz eder.
 2. Başlık, varsa süre, yaklaşık boyut ve mevcut çözünürlükler döner. Her kaynak bu bilgileri sunmaz.
-3. Seçilen çözünürlüğü aşmayan en iyi kaynak indirilir. `En iyi kalite` üst sınır koymaz.
-4. Ayrı görüntü/ses varsa FFmpeg birleştirir. MP4 kapsayıcısına kayıpsız aktarım denenir; gerekirse H.264/AAC dönüşümü yapılır.
-5. Kullanıcı videoyu kuyruğa ekler. Aynı anda iki indirme çalışır, diğerleri FIFO sırasıyla başlar. İndirme sürerken başka bir bağlantı analiz edilebilir.
-6. “İndirmelerim” bölümü her işin durumunu, bekleme sırasını ve dosya temizlenme saatini gösterir. Duraklat, devam et, iptal et, indir ve sil işlemleri ayrı ayrı yapılabilir.
-7. Sayfa kapansa veya sunucu yeniden başlatılsa da kayıtlar kalır. Yeniden başlatmada yarım kalan işler duraklatılmış olarak açılır; kullanıcı “Devam et” ile sürdürür.
+3. Analiz sırasında oluşan cookie'ler, istek başlıkları ve çözümlenmiş formatlar yalnız sunucuda, 0600 izinli kısa ömürlü bir indirme planında saklanır. İndirme kaynak sayfasını ikinci kez çözümlemeden bu oturumu kullanır.
+4. Seçilen çözünürlüğü aşmayan en iyi kaynak indirilir. `En iyi kalite` üst sınır koymaz.
+5. Ayrı görüntü/ses varsa FFmpeg birleştirir. MP4 kapsayıcısına kayıpsız aktarım denenir; gerekirse H.264/AAC dönüşümü yapılır.
+6. Kullanıcı videoyu kuyruğa ekler. Aynı anda iki indirme çalışır, diğerleri FIFO sırasıyla başlar. İndirme sürerken başka bir bağlantı analiz edilebilir.
+7. “İndirmelerim” bölümü her işin durumunu, bekleme sırasını ve dosya temizlenme saatini gösterir. Duraklat, devam et, iptal et, indir ve sil işlemleri ayrı ayrı yapılabilir.
+8. Sayfa kapansa veya sunucu yeniden başlatılsa da kayıtlar kalır. Yeniden başlatmada yarım kalan işler duraklatılmış olarak açılır; kullanıcı “Devam et” ile sürdürür.
 
 ### Devam etme ve hata davranışı
 
@@ -43,6 +44,7 @@ Doğrudan MP4, yt-dlp'nin desteklediği site/oynatıcılar ve yerel indiriciyle 
 ## Sınırlar ve dağıtım
 
 - Bu sürüm tek kullanıcı için **localhost** üzerinde çalışır; internete açık bir hizmet olarak yayımlanmamıştır. Host kontrolü localhost ile sınırlıdır.
+- Geçici uzaktan testlerde `MP4_ALLOWED_HOSTS` ile host listesi, `MP4_ACCESS_USER` ve `MP4_ACCESS_PASSWORD` ile HTTP Basic giriş zorunluluğu ayarlanabilir. `/api/health` sağlık kontrolü için açık kalır.
 - DRM, giriş isteyen kaynaklar ve canlı yayınlar desteklenmez. JavaScript çalıştırarak ağ trafiği yakalama henüz eklenmemiştir. Bölgesel/ağ erişim hatalarında yapılandırılmış Proton VPN üzerinden bir alternatif deneme yapılabilir; giriş, CAPTCHA veya DRM kaldırılmaz.
 - Dosya başına 500 MB kaynak sınırı, 2 saat video süresi, eşzamanlı iki indirme ve kuyruk beklemesi hariç en fazla 15 dakika hazırlama süresi vardır. Çalışanlar dahil en fazla 10 iş sıraya alınır; toplam 20 kayıt saklanır. Analiz için ayrı bir işlem yuvası bulunur. Geçici işlem dosyalarına ayrıca disk sınırı uygulanır. Birleştirme/dönüşüm sonucunun boyutu kaynak boyutundan farklı olabilir.
 - Bitmiş, duraklatılmış, iptal edilmiş ve başarısız işler **son durum değişiminden bir saat sonra** temizlenir. Çalışan işin dosyası süre doldu diye silinmez. Temizleme her 60 saniyede ve API erişimlerinde yapılır.

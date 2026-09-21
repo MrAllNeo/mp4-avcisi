@@ -1,11 +1,13 @@
 """One media operation per subprocess; stdout is newline-delimited JSON."""
 
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 import time
+from urllib.parse import quote, urlsplit
 
 from app.diagnostics import exception_fields, safe_fields
 from app.network import guard_network, validate_url
@@ -14,6 +16,58 @@ from app.errors import MediaError, describe_error
 from app.source_trace import trace_requests
 
 MAX_BYTES = 500 * 1024 * 1024
+PLAN_FILE = "analysis.json"
+COOKIE_FILE = "session.cookies"
+BROWSER_DOMAINS = {
+    "pornhub.com", "pornhub.net", "pornhub.org", "pornhubpremium.com",
+    "xvideos.com", "xvideos2.com", "xvideos.es",
+}
+
+
+def browser_site(url):
+    """Browser impersonation is deliberately limited to supported public sites."""
+    host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    return any(host == domain or host.endswith("." + domain) for domain in BROWSER_DOMAINS)
+
+
+def private_file(path, data):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.parent.chmod(0o700)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            json.dump(data, stream, ensure_ascii=False)
+        os.replace(temporary, path)
+        path.chmod(0o600)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def load_plan(directory):
+    path = directory / PLAN_FILE
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 16 * 1024 * 1024:
+        return None
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError):
+        raise MediaError("analysis_expired", "Video oturumu kullanılamıyor. Bağlantıyı yeniden analiz et.") from None
+    if not isinstance(value, dict) or not value.get("webpage_url"):
+        raise MediaError("analysis_expired", "Video oturumu kullanılamıyor. Bağlantıyı yeniden analiz et.")
+    return value
+
+
+def proxy_url(proxy):
+    return (f"http://{quote(proxy['username'], safe='')}:{quote(proxy['password'], safe='')}@"
+            f"{proxy['host']}:{proxy['port']}")
+
+
+def secure_cookie_file(path):
+    path = Path(path)
+    if path.is_file() and not path.is_symlink():
+        path.chmod(0o600)
 
 
 def emit(**data):
@@ -127,6 +181,7 @@ def summarize(info):
 
 def run():
     import yt_dlp
+    from yt_dlp.networking.impersonate import ImpersonateTarget
     from yt_dlp.version import __version__
     from yt_dlp.downloader.external import FFmpegFD
 
@@ -145,6 +200,7 @@ def run():
     mode = payload["mode"]
     directory = Path(payload.get("directory", ".")).resolve()
     ffmpeg = get_ffmpeg()
+    cookie_file = directory / COOKIE_FILE
 
     options = {
         "quiet": True,
@@ -170,12 +226,27 @@ def run():
         "postprocessor_args": {"ffmpeg_i": ["-protocol_whitelist", "file,pipe"]},
         "progress_hooks": [make_progress_hook()],
         "restrictfilenames": True,
+        "cookiefile": str(cookie_file),
     }
+    # PornHub requests impersonation itself; XVideos benefits from a forced
+    # browser TLS fingerprint on deployments that receive reduced HTML. Native
+    # curl remains scoped to these known sites; other URLs keep the socket guard.
+    if mode == "analyze" and browser_site(url):
+        options["impersonate"] = ImpersonateTarget.from_str("chrome")
+        if payload.get("vpn_proxy"):
+            # Native curl does not use the Python socket shim. Explicitly route
+            # browser traffic through the isolated Gluetun proxy on VPN attempts.
+            options["proxy"] = proxy_url(payload["vpn_proxy"])
+        diagnostic("browser_transport", enabled=True, route=payload.get("route", "direct"))
     if mode == "analyze":
         stage("extract")
-        with yt_dlp.YoutubeDL(options) as downloader:
-            trace_requests(downloader, url, diagnostic)
-            info = downloader.extract_info(url, download=False)
+        try:
+            with yt_dlp.YoutubeDL(options) as downloader:
+                trace_requests(downloader, url, diagnostic)
+                info = downloader.extract_info(url, download=False)
+        finally:
+            secure_cookie_file(cookie_file)
+        private_file(directory / PLAN_FILE, yt_dlp.YoutubeDL.sanitize_info(info))
         emit(event="result", metadata=summarize(info))
         return
 
@@ -195,13 +266,21 @@ def run():
 
     options["match_filter"] = match_filter
     stage("download")
-    with yt_dlp.YoutubeDL(options) as downloader:
-        trace_requests(downloader, url, diagnostic)
-        try:
-            downloader.extract_info(url, download=True)
-        except yt_dlp.utils.MaxDownloadsReached:
-            # yt-dlp signals the one-video limit after a successful download too.
-            pass
+    try:
+        with yt_dlp.YoutubeDL(options) as downloader:
+            trace_requests(downloader, url, diagnostic)
+            try:
+                plan = load_plan(directory)
+                if plan:
+                    diagnostic("analysis_reused", extractor=plan.get("extractor_key") or plan.get("extractor"))
+                    downloader.process_ie_result(plan, download=True)
+                else:
+                    downloader.extract_info(url, download=True)
+            except yt_dlp.utils.MaxDownloadsReached:
+                # yt-dlp signals the one-video limit after a successful download too.
+                pass
+    finally:
+        secure_cookie_file(cookie_file)
     files = [p for p in directory.glob("source.*") if p.suffix not in {".part", ".ytdl", ".json"}]
     if len(files) != 1:
         raise MediaError("incomplete_download", "Video dosyası tamamlanamadı. Başka bir kalite veya bağlantı dene.", True)

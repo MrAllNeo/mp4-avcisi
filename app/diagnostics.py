@@ -42,7 +42,8 @@ EVENTS = set('server_started server_stopped job_queued job_started job_finished 
              'stage_started progress size_limit source_warning source_error ffmpeg_finished '
              'ffmpeg_failed legacy_failure vpn_starting vpn_connected vpn_stopped '
              'vpn_cleanup_failed vpn_fallback vpn_unconfigured engine_ready '
-             'request_finished request_failed routing_failed'.split())
+             'request_finished request_failed routing_failed browser_transport '
+             'analysis_reused'.split())
 
 
 class PrivateRotatingHandler(RotatingFileHandler):
@@ -98,7 +99,7 @@ def safe_fields(fields):
             result[key] = value
         elif key in {'code', 'exception_type'} and isinstance(value, str) and re.fullmatch(r'[A-Za-z_]{1,64}', value):
             result[key] = value
-        elif key in {'retryable', 'redirected', 'has_referer', 'user_agent_changed'} and isinstance(value, bool):
+        elif key in {'retryable', 'redirected', 'has_referer', 'user_agent_changed', 'enabled'} and isinstance(value, bool):
             result[key] = value
         elif key == 'causes' and isinstance(value, list):
             result[key] = [{k: v for k, v in cause.items()
