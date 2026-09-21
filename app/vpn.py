@@ -217,6 +217,9 @@ class VpnGateway:
         self.write_private(tor_config,
             f'ClientOnly 1\nSocksPort 127.0.0.1:{TOR_SOCKS_PORT}\n'
             f'DataDirectory {data_directory.resolve()}\nAvoidDiskWrites 1\n'
+            f'ClientUseIPv6 0\nUseMicrodescriptors 0\n'
+            f'FascistFirewall 1\nReachableAddresses *:443\n'
+            f'FetchDirInfoEarly 1\nFetchDirInfoExtraEarly 1\n'
             f'ExitNodes {exits}\nStrictNodes {int(self.tor_strict_nodes)}\n'
             f'Log notice file {tor_log.resolve()}\n')
         self.write_private(privoxy_config,

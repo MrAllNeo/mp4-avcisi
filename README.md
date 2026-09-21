@@ -125,6 +125,8 @@ MP4_TOR_STRICT_NODES=0
 
 Tor yalnız `127.0.0.1` üzerinde çalışan SOCKS bağlantısını yine yalnız yereldeki Privoxy HTTP CONNECT katmanına açar. Uygulamanın geri kalanı ve sunucunun genel rotası değiştirilmez. Production varsayılanında bağlantı ilk isteğin süresini tüketmemesi için işler arasında açık tutulur ve normal sunucu kapanışında kapatılır. `MP4_TOR_PERSISTENT=0` yapılırsa son alternatif ağ işi bittiğinde iki süreç de kapanır. Güvenli tanı logunda `tor_bootstrap` yüzdeleri ve hazırlama başarısızlığı tutulur; kullanıcıya dönen teknik ayrıntı zaman aşımındaki son yüzdeyi içerir.
 
+Railway gibi kısıtlı çıkış ortamlarında Tor yalnız 443 portundaki relay'lere bağlanır, IPv4 kullanır ve mikro-descriptor indirmesi engellenirse klasik relay descriptor biçimini kullanır. Bu ayarlar bir bridge değildir; hosting sağlayıcısı Tor trafiğini tamamen engelliyorsa bağlantı kurulamaz.
+
 ### WireGuard modu
 
 Production imajı açık kaynak [WireProxy](https://github.com/windtf/wireproxy) kullanır. WireGuard tamamen kullanıcı alanında çalıştığı için Railway'de ikinci bir Docker daemon'u, root yetkisi, `NET_ADMIN` veya `/dev/net/tun` gerekmez. Yalnız ilgili worker'ın trafiği `127.0.0.1` üzerindeki kimlik doğrulamalı HTTP CONNECT proxy'sinden geçer. Yerel geliştirmede eski Gluetun/Docker yolu `MP4_VPN_MODE=docker` ile kullanılmaya devam edebilir.

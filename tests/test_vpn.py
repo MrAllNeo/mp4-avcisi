@@ -182,6 +182,8 @@ def test_tor_starts_private_local_proxy_and_cleans_up(tmp_path, monkeypatch):
             privoxy = (gateway.root / 'privoxy.conf').read_text()
             assert 'ExitNodes {nl},{fr},{ro}' in torrc and 'StrictNodes 0' in torrc
             assert 'SocksPort 127.0.0.1:19050' in torrc
+            assert 'UseMicrodescriptors 0' in torrc
+            assert 'ReachableAddresses *:443' in torrc
             assert 'listen-address 127.0.0.1:18989' in privoxy
             assert 'forward-socks5t / 127.0.0.1:19050 .' in privoxy
             assert (gateway.root / 'torrc').stat().st_mode & 0o777 == 0o600
