@@ -246,7 +246,7 @@ def test_analysis_parser_failure_retries_during_first_step(monkeypatch):
 @pytest.mark.parametrize('text,code', [
     ('Video not available in your country', 'geo_blocked'),
     ('HTTP Error 451', 'geo_blocked'),
-    ("Sign in to confirm you're not a bot", 'authentication'),
+    ("Sign in to confirm you're not a bot", 'bot_blocked'),
     ('HTTP Error 403 CAPTCHA', 'bot_blocked'),
 ])
 def test_access_error_classification(text, code):
