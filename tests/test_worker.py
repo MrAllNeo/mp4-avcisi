@@ -12,6 +12,25 @@ def events(capsys):
     return [json.loads(line) for line in capsys.readouterr().out.splitlines()]
 
 
+@pytest.mark.parametrize('url', [
+    'https://www.eporner.com/video-test/example/',
+    'https://de.xhamster.com/videos/example-test',
+    'https://xhamster20.desi/videos/example-test',
+    'https://members.brazzers.com/video/example',
+])
+def test_public_browser_sites_use_hardened_transport(url):
+    assert worker.browser_site(url)
+
+
+@pytest.mark.parametrize('url', [
+    'https://noteporner.com/video/test',
+    'https://xhamster20.example/videos/test',
+    'https://brazzers.com.attacker.example/video/test',
+])
+def test_similar_domains_do_not_get_browser_transport(url):
+    assert not worker.browser_site(url)
+
+
 @pytest.mark.parametrize('known', [None, worker.MAX_BYTES])
 def test_inaccurate_estimate_does_not_reject_small_download(known, capsys):
     hook = worker.make_progress_hook()
