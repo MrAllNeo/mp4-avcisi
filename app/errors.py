@@ -82,10 +82,15 @@ def _describe_single_error(error):
         return MediaError("protected", "Bu video korumalı olduğu için indirilemiyor.")
     if "vpn bağlantısı" in text:
         return MediaError("vpn_unavailable", "Proton VPN bağlantısı kurulamadı. Daha sonra yeniden dene.", True)
-    if any(part in text for part in ("sign in", "log in", "login", "authentication", "http error 401")):
-        return MediaError("authentication", "Bu kaynak giriş istiyor. Herkese açık bir bağlantı kullan.")
     if any(part in text for part in ("captcha", "confirm you're not a bot", "bot detection", "anti-bot")):
         return MediaError("bot_blocked", "Kaynak doğrulama istiyor; otomatik indirmeye izin vermiyor.")
+    if "redirection detected; the video may be deleted or require login" in text:
+        return MediaError(
+            "access_denied",
+            "Kaynak video yerine başka bir sayfaya yönlendirdi. Video kaldırılmış veya bölge/yaş doğrulama engeline takılmış olabilir.",
+        )
+    if any(part in text for part in ("sign in", "log in", "login", "authentication", "http error 401")):
+        return MediaError("authentication", "Bu kaynak giriş istiyor. Herkese açık bir bağlantı kullan.")
     if any(part in text for part in ("not available in your country", "not available from your location", "geo-restricted", "geo restricted", "http error 451")):
         return MediaError("geo_blocked", "Kaynak bu bölgeden erişime izin vermiyor.")
     if any(part in text for part in ("http error 403", "forbidden")):
