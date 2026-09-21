@@ -26,7 +26,7 @@ CHOICES = {
     'method': {'GET', 'HEAD', 'POST', 'PUT', 'OPTIONS', 'DELETE', 'PATCH'},
     'origin_relation': {'same', 'other'},
     'source_hint': {'generic_fallback', 'browser_transport_unavailable', 'unknown'},
-    'route': {'direct', 'proton'},
+    'route': {'direct', 'vpn', 'proton'},
     'stage': {'startup', 'extract', 'download', 'probe', 'remux', 'transcode', 'finalize', 'storage'},
     'mode': {'analyze', 'download'},
     'status': {'queued', 'processing', 'paused', 'cancelled', 'complete', 'error'},

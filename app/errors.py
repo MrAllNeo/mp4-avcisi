@@ -81,7 +81,7 @@ def _describe_single_error(error):
     if "drm" in text:
         return MediaError("protected", "Bu video korumalı olduğu için indirilemiyor.")
     if "vpn bağlantısı" in text:
-        return MediaError("vpn_unavailable", "Proton VPN bağlantısı kurulamadı. Daha sonra yeniden dene.", True)
+        return MediaError("vpn_unavailable", "VPN bağlantısı kurulamadı. Daha sonra yeniden dene.", True)
     if any(part in text for part in ("captcha", "confirm you're not a bot", "bot detection", "anti-bot")):
         return MediaError("bot_blocked", "Kaynak doğrulama istiyor; otomatik indirmeye izin vermiyor.")
     if "redirection detected; the video may be deleted or require login" in text:

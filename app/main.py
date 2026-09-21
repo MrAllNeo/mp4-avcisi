@@ -22,7 +22,7 @@ from app.errors import MediaError, describe_error
 from app import diagnostics
 from app.jobstore import ACTIVE, TTL, Job, JobStore
 from app.network import validate_url
-from app.vpn import ProtonGateway, can_retry_via_vpn
+from app.vpn import VpnGateway, can_retry_via_vpn
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / '.data'
@@ -40,7 +40,7 @@ analyses = {}
 tasks = {}
 stop_reasons = {}
 changing = set()
-gateway = ProtonGateway(DATA / 'proton')
+gateway = VpnGateway(DATA / 'proton')
 
 
 def save(job):
@@ -92,7 +92,7 @@ async def reap():
 @asynccontextmanager
 async def lifespan(app):
     global slots, analysis_slots, gateway
-    gateway = ProtonGateway(DATA / 'proton')
+    gateway = VpnGateway(DATA / 'proton')
     diagnostics.configure(DATA / 'logs')
     slots, analysis_slots = asyncio.Semaphore(2), asyncio.Semaphore(1)
     jobs.clear()
@@ -205,9 +205,9 @@ async def worker(payload, on_event=None, timeout=90):
                         'manifest': 'akış listesi', 'metadata': 'video bilgisi', 'media': 'medya dosyası'}.get(detail.get('resource'), 'kaynak')
             error.message = f'Kaynak site {resource} isteğini reddetti (HTTP 403).'
             if not gateway.configured and error.diagnostic['route'] == 'direct':
-                error.message += ' Otomatik Proton VPN yapılandırılmadığı için alternatif bağlantı denenemedi.'
-        if error.diagnostic['route'] == 'proton' and error.code not in {'vpn_config', 'vpn_unavailable'}:
-            error.message += ' Bu hata Proton VPN üzerinden yapılan denemede oluştu.'
+                error.message += ' Otomatik VPN yapılandırılmadığı için alternatif bağlantı denenemedi.'
+        if error.diagnostic['route'] in {'vpn', 'proton'} and error.code not in {'vpn_config', 'vpn_unavailable'}:
+            error.message += ' Bu hata VPN üzerinden yapılan denemede oluştu.'
         diagnostics.record('routing_failed', **error.diagnostic, code=error.code)
         raise error from None
 
@@ -216,7 +216,7 @@ async def _routed_worker(payload, on_event=None, timeout=90):
     # A single deadline covers the direct attempt, gateway startup and VPN retry.
     # Credentials are internal-only and reach the child via stdin, never argv.
     async with asyncio.timeout(timeout):
-        if payload.get('route') != 'proton':
+        if payload.get('route') not in {'vpn', 'proton'}:
             try:
                 direct_budget = min(timeout, 35) if payload['mode'] == 'analyze' and gateway.configured else timeout
                 result = await _worker_once(payload, on_event, timeout=direct_budget)
@@ -228,21 +228,21 @@ async def _routed_worker(payload, on_event=None, timeout=90):
                     raise
                 if not gateway.configured:
                     diagnostics.record('vpn_unconfigured', job_id=payload.get('job_id'), request_id=payload.get('request_id'), code=error.code)
-                    error.message += ' Otomatik Proton VPN yapılandırılmadığı için alternatif bağlantı denenemedi.'
+                    error.message += ' Otomatik VPN yapılandırılmadığı için alternatif bağlantı denenemedi.'
                     raise error from None
-                diagnostics.record('vpn_fallback', job_id=payload.get('job_id'), request_id=payload.get('request_id'), code=error.code, route='proton')
+                diagnostics.record('vpn_fallback', job_id=payload.get('job_id'), request_id=payload.get('request_id'), code=error.code, route='vpn')
         elif not gateway.configured:
-            raise MediaError('vpn_config', 'Bu işlem Proton VPN gerektiriyor. Sunucunun VPN ayarlarını kontrol et.', True)
+            raise MediaError('vpn_config', 'Bu işlem VPN bağlantısı gerektiriyor. Sunucunun VPN ayarlarını kontrol et.', True)
         if on_event:
-            on_event({'event': 'progress', 'message': 'Proton VPN bağlantısı hazırlanıyor…', 'percent': None, 'route': 'proton'})
+            on_event({'event': 'progress', 'message': 'VPN bağlantısı hazırlanıyor…', 'percent': None, 'route': 'vpn'})
         try:
             async with gateway.connection() as proxy:
-                result = await _worker_once({**payload, 'vpn_proxy': proxy, 'route': 'proton'}, on_event, timeout=timeout)
-                return {**result, 'route': 'proton'}
+                result = await _worker_once({**payload, 'vpn_proxy': proxy, 'route': 'vpn'}, on_event, timeout=timeout)
+                return {**result, 'route': 'vpn'}
         except Exception as exc:
             error = describe_error(exc)
-            error.diagnostic = {**getattr(error, 'diagnostic', {}), 'route': 'proton',
-                                'attempt': 1 if payload.get('route') == 'proton' else 2}
+            error.diagnostic = {**getattr(error, 'diagnostic', {}), 'route': 'vpn',
+                                'attempt': 1 if payload.get('route') in {'vpn', 'proton'} else 2}
             raise error from None
 
 
@@ -491,7 +491,7 @@ async def analyze(body: AnalyzeInput):
         if error.code == 'source_failed' and not getattr(error, 'diagnostic', None):
             error.message = 'Sayfadan video bilgileri alınamadı. Kaynak çözümleme hatasının nedeni henüz belirlenemedi.'
             if not gateway.configured:
-                error.message += ' Otomatik Proton VPN de henüz yapılandırılmamış.'
+                error.message += ' Otomatik VPN de henüz yapılandırılmamış.'
         raise error from None
     route = result.get('route', 'direct')
     analyses[key] = {'url': body.url, 'metadata': result['metadata'], 'created': time.time(),

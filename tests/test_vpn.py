@@ -8,7 +8,7 @@ import pytest
 from app import main
 from app.configure_vpn import import_config
 from app.errors import MediaError, describe_error
-from app.vpn import ProtonGateway, validate_config
+from app.vpn import VpnGateway, validate_config
 
 
 def config_text():
@@ -60,7 +60,7 @@ def test_railway_secret_is_materialized_privately_and_removed(tmp_path, monkeypa
     monkeypatch.setenv('MP4_VPN_CONFIG_B64', encoded)
     monkeypatch.setenv('MP4_VPN_MODE', 'wireproxy')
     monkeypatch.setenv('MP4_VPN_COUNTRY', 'nl')
-    gateway = ProtonGateway(tmp_path)
+    gateway = VpnGateway(tmp_path)
     calls = []
 
     async def start_wireproxy(username, password):
@@ -76,6 +76,7 @@ def test_railway_secret_is_materialized_privately_and_removed(tmp_path, monkeypa
             assert proxy['username'] == 'mp4'
             assert proxy['password'] == calls[0][1]
             assert gateway.public()['country'] == 'NL'
+            assert gateway.public()['provider'] == 'wireguard'
             assert encoded not in json.dumps(gateway.public())
         assert not gateway.config.exists()
 
@@ -83,7 +84,7 @@ def test_railway_secret_is_materialized_privately_and_removed(tmp_path, monkeypa
 
 
 def test_invalid_railway_secret_does_not_leak_or_replace_config(tmp_path, monkeypatch):
-    gateway = ProtonGateway(tmp_path)
+    gateway = VpnGateway(tmp_path)
     gateway.config.write_text(config_text())
     monkeypatch.setenv('MP4_VPN_CONFIG_B64', base64.b64encode(b'PrivateKey = secret-value').decode())
     with pytest.raises(MediaError) as caught:
@@ -106,7 +107,7 @@ def test_ipv6_only_import_preserves_existing_config(tmp_path):
 
 
 def test_simultaneous_jobs_share_tunnel_and_last_release_stops_it(tmp_path, monkeypatch):
-    gateway = ProtonGateway(tmp_path)
+    gateway = VpnGateway(tmp_path)
     actions = []
     async def start():
         actions.append('start')
@@ -126,7 +127,7 @@ def test_simultaneous_jobs_share_tunnel_and_last_release_stops_it(tmp_path, monk
 
 
 def test_cancellation_releases_tunnel(tmp_path, monkeypatch):
-    gateway = ProtonGateway(tmp_path)
+    gateway = VpnGateway(tmp_path)
     stopped = []
     async def start():
         gateway.proxy = {}
@@ -150,7 +151,7 @@ def test_cancellation_releases_tunnel(tmp_path, monkeypatch):
 
 
 def test_cancel_during_start_cleans_up_without_acquiring_lease(tmp_path, monkeypatch):
-    gateway = ProtonGateway(tmp_path)
+    gateway = VpnGateway(tmp_path)
     actions = []
     async def start():
         raise asyncio.CancelledError
@@ -191,7 +192,7 @@ def test_retry_once_via_vpn_and_release(monkeypatch, code):
         return {'event': 'result', 'size': 123}
     monkeypatch.setattr(main, '_worker_once', attempt)
     result = asyncio.run(main.worker({'mode': 'download'}, progress.append))
-    assert result['route'] == 'proton'
+    assert result['route'] == 'vpn'
     assert len(calls) == 2 and 'vpn_proxy' not in calls[0]
     assert calls[1]['vpn_proxy']['password'] == 'internal-secret'
     assert gateway.entered == gateway.exited == 1
@@ -235,8 +236,8 @@ def test_failed_vpn_attempt_is_not_retried_directly(monkeypatch):
     with pytest.raises(MediaError) as caught:
         asyncio.run(main.worker({'mode': 'download'}))
     assert len(calls) == 2 and gateway.entered == gateway.exited == 1
-    assert caught.value.diagnostic['route'] == 'proton' and caught.value.diagnostic['attempt'] == 2
-    assert 'Proton VPN üzerinden' in caught.value.message
+    assert caught.value.diagnostic['route'] == 'vpn' and caught.value.diagnostic['attempt'] == 2
+    assert 'VPN üzerinden' in caught.value.message
     assert calls[0]['request_id'] == calls[1]['request_id'] == caught.value.diagnostic['request_id']
 
 
@@ -244,10 +245,10 @@ def test_known_vpn_route_skips_direct_attempt(monkeypatch):
     gateway = FakeGateway()
     monkeypatch.setattr(main, 'gateway', gateway)
     async def attempt(payload, *args, **kwargs):
-        assert payload['vpn_proxy'] and payload['route'] == 'proton'
+        assert payload['vpn_proxy'] and payload['route'] == 'vpn'
         return {'event': 'result', 'size': 1}
     monkeypatch.setattr(main, '_worker_once', attempt)
-    assert asyncio.run(main.worker({'mode': 'download', 'route': 'proton'}))['route'] == 'proton'
+    assert asyncio.run(main.worker({'mode': 'download', 'route': 'proton'}))['route'] == 'vpn'
     assert gateway.entered == gateway.exited == 1
 
 
@@ -277,7 +278,7 @@ def test_analysis_parser_failure_retries_during_first_step(monkeypatch):
         return {'metadata': {'title': 'test', 'qualities': []}}
     monkeypatch.setattr(main, '_worker_once', attempt)
     result = asyncio.run(main.worker({'mode': 'analyze'}))
-    assert result['route'] == 'proton'
+    assert result['route'] == 'vpn'
     assert len(calls) == 2 and gateway.entered == gateway.exited == 1
 
 
@@ -292,7 +293,7 @@ def test_access_error_classification(text, code):
 
 
 def test_gateway_starts_isolated_and_removes_only_its_container(tmp_path, monkeypatch):
-    gateway = ProtonGateway(tmp_path)
+    gateway = VpnGateway(tmp_path)
     gateway.config.write_text(config_text())
     calls = []
     async def docker(*args, **kwargs):
@@ -323,7 +324,7 @@ def test_gateway_starts_isolated_and_removes_only_its_container(tmp_path, monkey
 
 
 def test_failed_start_removes_credentials_and_releases_lease(tmp_path, monkeypatch):
-    gateway = ProtonGateway(tmp_path)
+    gateway = VpnGateway(tmp_path)
     gateway.config.write_text(config_text())
     async def docker(*args, **kwargs):
         if args[0] == 'run':
@@ -340,7 +341,7 @@ def test_failed_start_removes_credentials_and_releases_lease(tmp_path, monkeypat
 
 
 def test_cleanup_failure_is_visible_without_leaking_credentials(tmp_path, monkeypatch):
-    gateway = ProtonGateway(tmp_path)
+    gateway = VpnGateway(tmp_path)
     gateway.proxy = {'password': 'private'}
     (tmp_path / 'proxy.env').write_text('private')
     async def remove():

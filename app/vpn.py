@@ -1,4 +1,4 @@
-"""On-demand Proton WireGuard gateway; the host's default route is untouched."""
+"""On-demand provider-neutral WireGuard gateway; the host route is untouched."""
 import asyncio
 import base64
 import configparser
@@ -7,6 +7,7 @@ import hashlib
 import ipaddress
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 
@@ -42,15 +43,15 @@ def validate_config(path):
             raise ValueError
         path.chmod(0o600)
     except (OSError, ValueError, KeyError, configparser.Error):
-        raise MediaError('vpn_config', 'Proton VPN yapılandırması eksik veya geçersiz. Sunucu ayarlarını kontrol et.') from None
+        raise MediaError('vpn_config', 'WireGuard VPN yapılandırması eksik veya geçersiz. Sunucu ayarlarını kontrol et.') from None
 
 
-class ProtonGateway:
+class VpnGateway:
     def __init__(self, root):
         self.root = Path(root)
         self.config = self.root / 'wg0.conf'
         suffix = hashlib.sha256(str(self.root.resolve()).encode()).hexdigest()[:10]
-        self.name = f'mp4-proton-{suffix}'
+        self.name = f'mp4-vpn-{suffix}'
         self.label = f'com.toywes.mp4.gateway={suffix}'
         self.lock = asyncio.Lock()
         self.users = 0
@@ -74,7 +75,8 @@ class ProtonGateway:
 
     def public(self):
         country = os.environ.get('MP4_VPN_COUNTRY', '').strip().upper()[:8] or None
-        return {'provider': 'proton', 'transport': self.mode, 'country': country,
+        provider = re.sub(r'[^a-z0-9._-]', '', os.environ.get('MP4_VPN_PROVIDER', 'wireguard').strip().lower())[:32]
+        return {'provider': provider or 'wireguard', 'transport': self.mode, 'country': country,
                 'configured': self.configured,
                 'state': self.state if self.configured else 'unconfigured', 'active_jobs': self.users}
 
@@ -90,7 +92,7 @@ class ProtonGateway:
             if len(content.encode()) > 16384:
                 raise ValueError
         except (ValueError, UnicodeError):
-            raise MediaError('vpn_config', 'Proton VPN yapılandırma değişkeni geçersiz.') from None
+            raise MediaError('vpn_config', 'WireGuard VPN yapılandırma değişkeni geçersiz.') from None
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.root.chmod(0o700)
         temporary = self.root / '.wg0.conf.tmp'
@@ -163,10 +165,10 @@ class ProtonGateway:
             async with asyncio.timeout(timeout):
                 output, _ = await process.communicate()
             if process.returncode:
-                raise MediaError('vpn_unavailable', 'Proton VPN başlatılamadı. Docker ve VPN yapılandırmasını kontrol et.', True)
+                raise MediaError('vpn_unavailable', 'WireGuard VPN başlatılamadı. Docker ve VPN yapılandırmasını kontrol et.', True)
             return output.decode().strip()
         except (OSError, TimeoutError):
-            raise MediaError('vpn_unavailable', 'Proton VPN hizmetine ulaşılamadı. Daha sonra yeniden dene.', True) from None
+            raise MediaError('vpn_unavailable', 'WireGuard VPN hizmetine ulaşılamadı. Daha sonra yeniden dene.', True) from None
         finally:
             if process is not None and process.returncode is None:
                 process.kill()
@@ -211,7 +213,7 @@ class ProtonGateway:
                     if status == 'healthy':
                         break
                     if status not in {'starting', 'unhealthy'}:
-                        raise MediaError('vpn_unavailable', 'Proton VPN bağlantısı hazır değil.', True)
+                        raise MediaError('vpn_unavailable', 'WireGuard VPN bağlantısı hazır değil.', True)
                     await asyncio.sleep(1)
         self.proxy = {'host': '127.0.0.1', 'port': PROXY_PORT, 'username': username, 'password': password}
         self.state = 'connected'
@@ -278,3 +280,7 @@ class ProtonGateway:
             except asyncio.CancelledError:
                 await cleanup
                 raise
+
+
+# Import compatibility for integrations created before provider-neutral naming.
+ProtonGateway = VpnGateway

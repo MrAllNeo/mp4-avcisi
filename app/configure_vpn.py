@@ -1,4 +1,4 @@
-"""Import a Proton WireGuard file locally without printing its contents."""
+"""Import a WireGuard provider file locally without printing its contents."""
 import argparse
 import configparser
 import ipaddress
@@ -23,7 +23,7 @@ def import_config(source, destination):
         with os.fdopen(fd, 'wb') as stream:
             stream.write(data)
         validate_config(temporary)
-        # Proton exports dual-stack addresses. The isolated gateway uses the
+        # Some providers export dual-stack addresses. The isolated gateway uses the
         # default IPv4 Docker bridge, so an IPv6 interface prevents startup.
         # Normalize only our private copy; preserve the downloaded original.
         config = configparser.ConfigParser(interpolation=None)
@@ -33,7 +33,7 @@ def import_config(source, destination):
         addresses = [ipaddress.ip_interface(value.strip()) for value in config['Interface'][address_key].split(',')]
         ipv4 = [str(address) for address in addresses if address.version == 4]
         if not ipv4:
-            raise MediaError('vpn_config', 'Bu VPN bağlantısı IPv4 adresi içeren bir Proton yapılandırması gerektiriyor.')
+            raise MediaError('vpn_config', 'Bu VPN bağlantısı IPv4 adresi içeren bir WireGuard yapılandırması gerektiriyor.')
         if len(ipv4) != len(addresses):
             config['Interface'][address_key] = ', '.join(ipv4)
             with temporary.open('w') as stream:
@@ -44,14 +44,14 @@ def import_config(source, destination):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Proton WireGuard yapılandırmasını yalnız bu projeye ekler.')
-    parser.add_argument('config', type=Path, help='Proton hesabından indirilen .conf dosyası')
+    parser = argparse.ArgumentParser(description='WireGuard yapılandırmasını yalnız bu projeye ekler.')
+    parser.add_argument('config', type=Path, help='VPN sağlayıcısından indirilen .conf dosyası')
     args = parser.parse_args()
     try:
         import_config(args.config, Path(__file__).resolve().parent.parent / '.data/proton/wg0.conf')
     except (OSError, ValueError):
-        parser.exit(1, 'Yapılandırma eklenemedi. Geçerli bir Proton WireGuard dosyası ve dosya izinlerini kontrol et.\n')
-    print('Proton yapılandırması güvenle kaydedildi. Otomatik VPN sonraki uygun erişim hatasında kullanılacak.')
+        parser.exit(1, 'Yapılandırma eklenemedi. Geçerli bir WireGuard dosyası ve dosya izinlerini kontrol et.\n')
+    print('WireGuard yapılandırması güvenle kaydedildi. Otomatik VPN sonraki uygun erişim hatasında kullanılacak.')
 
 
 if __name__ == '__main__':

@@ -2,7 +2,7 @@
 
 TOYWES (Toplum Yararına Web Siteleri) için video bağlantısını analiz eden, desteklenen herkese açık sayfalardaki gömülü kaynakları bulan ve MP4 dosyası hazırlayan yerel web uygulaması.
 
-Arayüz koyu tema kullanır. İsteğe bağlı Proton VPN bağlantısı, uygun erişim hatalarında otomatik devreye girer ve son kullanan işlem bittiğinde kapanır. PornHub, XVideos, Eporner ve xHamster gibi doğrulanmış herkese açık kaynaklarda yt-dlp'nin desteklediği Chrome TLS taklidi kullanılır; bunun için kilitli bağımlılıklarda `curl-cffi` bulunur. Brazzers için yalnız giriş istemeyen herkese açık video veya fragman sayfaları denenir; üyelik ya da DRM koruması aşılmaz.
+Arayüz koyu tema kullanır. İsteğe bağlı ve sağlayıcıdan bağımsız WireGuard VPN bağlantısı, uygun erişim hatalarında otomatik devreye girer ve son kullanan işlem bittiğinde kapanır. PornHub, XVideos, Eporner ve xHamster gibi doğrulanmış herkese açık kaynaklarda yt-dlp'nin desteklediği Chrome TLS taklidi kullanılır; bunun için kilitli bağımlılıklarda `curl-cffi` bulunur. Brazzers için yalnız giriş istemeyen herkese açık video veya fragman sayfaları denenir; üyelik ya da DRM koruması aşılmaz.
 
 ## Çalıştırma
 
@@ -45,7 +45,7 @@ Doğrudan MP4, yt-dlp'nin desteklediği site/oynatıcılar ve yerel indiriciyle 
 
 - Bu sürüm tek kullanıcı için **localhost** üzerinde çalışır; internete açık bir hizmet olarak yayımlanmamıştır. Host kontrolü localhost ile sınırlıdır.
 - Geçici uzaktan testlerde `MP4_ALLOWED_HOSTS` ile host listesi, `MP4_ACCESS_USER` ve `MP4_ACCESS_PASSWORD` ile HTTP Basic giriş zorunluluğu ayarlanabilir. Ayrı bir sunucu proxy'si `MP4_INTERNAL_TOKEN` değerini `X-MP4-Internal-Token` başlığında göndererek aynı API'ye erişebilir; bu token tarayıcıya verilmemelidir. `/api/health` sağlık kontrolü için açık kalır.
-- DRM, giriş isteyen kaynaklar ve canlı yayınlar desteklenmez. JavaScript çalıştırarak ağ trafiği yakalama henüz eklenmemiştir. Bölgesel/ağ erişim hatalarında yapılandırılmış Proton VPN üzerinden bir alternatif deneme yapılabilir; giriş, CAPTCHA veya DRM kaldırılmaz.
+- DRM, giriş isteyen kaynaklar ve canlı yayınlar desteklenmez. JavaScript çalıştırarak ağ trafiği yakalama henüz eklenmemiştir. Bölgesel/ağ erişim hatalarında yapılandırılmış WireGuard VPN üzerinden bir alternatif deneme yapılabilir; giriş, CAPTCHA veya DRM kaldırılmaz.
 - Dosya başına varsayılan 2 GB kaynak sınırı, 2 saat video süresi, eşzamanlı iki indirme ve kuyruk beklemesi hariç en fazla 15 dakika hazırlama süresi vardır. Çalışanlar dahil en fazla 10 iş sıraya alınır; toplam 20 kayıt saklanır. Analiz için ayrı bir işlem yuvası bulunur. Kaynak sınırı `MP4_MAX_BYTES`, geçici işlem diski sınırı `MP4_MAX_DISK_BYTES` ile bayt cinsinden değiştirilebilir. Birleştirme/dönüşüm sonucunun boyutu kaynak boyutundan farklı olabilir.
 - Bitmiş, duraklatılmış, iptal edilmiş ve başarısız işler **son durum değişiminden bir saat sonra** temizlenir. Çalışan işin dosyası süre doldu diye silinmez. Temizleme her 60 saniyede ve API erişimlerinde yapılır.
 - İş kayıtları `.data/<id>.json` dosyalarında atomik olarak saklanır. Kaynak URL'si devam edebilmek için kayda yazılır; bu dosyalar yalnız işletim sistemindeki kullanıcı tarafından okunabilir (0600), `.data/` izinleri 0700'dür. API listesi kaynak URL'sini döndürmez. Analiz sonuçları bellektedir; sunucu yeniden başlatılınca yeni indirmeler için tekrar analiz gerekir.
@@ -89,7 +89,7 @@ Hata yığınında yalnız kod dosyası, fonksiyon ve satır numarası bulunur; 
 
 ### Kaynak isteğini ve denemeleri ayırma
 
-Her üst düzey işlem `request_id` alır; doğrudan ve Proton denemeleri aynı kimliği paylaşır, her worker'ın `operation_id` değeri ayrıdır. Hata ekranındaki kısa işlem kodu loglarda bu kimliğin başlangıcını aramak içindir. `routing_failed` son denemenin rotasını ve hata nedenini özetler. Kaynağın VPN üzerinden reddettiği istek, arayüzde açıkça belirtilir.
+Her üst düzey işlem `request_id` alır; doğrudan ve VPN denemeleri aynı kimliği paylaşır, her worker'ın `operation_id` değeri ayrıdır. Hata ekranındaki kısa işlem kodu loglarda bu kimliğin başlangıcını aramak içindir. `routing_failed` son denemenin rotasını ve hata nedenini özetler. Kaynağın VPN üzerinden reddettiği istek, arayüzde açıkça belirtilir.
 
 `request_finished` / `request_failed` olayları HTTP yöntemini, durum kodunu, süreyi ve kaynak türünü ayırır. `resource`, istenen adresin dosya uzantısından ve başarılı yanıtlarda içerik türünden çıkarılır; belirsiz adresler `other` olarak kalır. `HEAD 200`, sonraki `GET` veya medya isteğinin başarılı olduğunu göstermez. İstek gövdeleri, başlık değerleri, URL, çerez ve token kaydedilmez. `target_ref` yalnız aynı worker içinde tekrarlanan hedefleri ilişkilendiren, her çalıştırmada rastgele tuzla yenilenen bir özettir.
 
@@ -97,29 +97,29 @@ Başarılı istek kayıtları ilk 40 istekle sınırlıdır; hatalar ve bir hata
 
 Kontrollü test, oturum çerezi ve doğru Referer olmadan 403 veren yerel bir sayfadan gerçek MP4 indirir. Çerez ve başlık aktarımı mevcut yt-dlp oturumunda korunur; analiz ve indirme ayrı süreçler olduğundan indirme kaynak sayfasını tekrar çözümler. Tarayıcının kişisel oturumu içe aktarılmaz.
 
-Uyumluluk incelemesinde (20 Eylül 2026) kurulu `2026.08.19` sürümü, PyPI ve GitHub'daki son kararlı sürümle aynıydı; kanıtlanmış bir güncelleme farkı olmadığı için sürüm değiştirilmedi. Otomatik strateji en fazla bir doğrudan ve bir Proton denemesiyle sınırlıdır; aynı işlemde rastgele sağlayıcı/sürüm değişimi veya sınırsız yeniden deneme yoktur.
+Uyumluluk incelemesinde (20 Eylül 2026) kurulu `2026.08.19` sürümü, PyPI ve GitHub'daki son kararlı sürümle aynıydı; kanıtlanmış bir güncelleme farkı olmadığı için sürüm değiştirilmedi. Otomatik strateji en fazla bir doğrudan ve bir VPN denemesiyle sınırlıdır; aynı işlemde rastgele sağlayıcı/sürüm değişimi veya sınırsız yeniden deneme yoktur.
 
 HTTP erişim logu yalnız isteğin kabulünü gösterir: indirmeye verilen `202`, dosyanın tamamlandığı anlamına gelmez. Ayrıntılı loglama eklenmeden önceki hatalarda kesin boyut ve aşama geriye dönük belirlenemez.
 
 Canlı siteler zamanla değiştiği için bu testler belirli bir sitenin her zaman çalışacağı anlamına gelmez. Gerçek kaynak denemeleri ayrıca yapılmalıdır.
 
-## İsteğe bağlı otomatik Proton VPN
+## İsteğe bağlı otomatik WireGuard VPN
 
-İndirmeyi **sunucu** yapar. Kullanıcının ülkesinde bir site engelli olsa bile sunucu erişebiliyorsa VPN gerekmez. Sunucu bağlantısı başarısız olduğunda Proton üzerinden yeniden deneme yardımcı olabilir; bütün engellerin aşılması garanti edilmez.
+İndirmeyi **sunucu** yapar. Kullanıcının ülkesinde bir site engelli olsa bile sunucu erişebiliyorsa VPN gerekmez. Sunucu bağlantısı başarısız olduğunda yapılandırılmış WireGuard çıkışı üzerinden yeniden deneme yardımcı olabilir; bütün engellerin aşılması garanti edilmez.
 
 Production imajı açık kaynak [WireProxy](https://github.com/windtf/wireproxy) kullanır. WireGuard tamamen kullanıcı alanında çalıştığı için Railway'de ikinci bir Docker daemon'u, root yetkisi, `NET_ADMIN` veya `/dev/net/tun` gerekmez. Yalnız ilgili worker'ın trafiği `127.0.0.1` üzerindeki kimlik doğrulamalı HTTP CONNECT proxy'sinden geçer. Yerel geliştirmede eski Gluetun/Docker yolu `MP4_VPN_MODE=docker` ile kullanılmaya devam edebilir.
 
-Açık kaynak istemci tek başına ülke çıkış IP'si sağlamaz. Proton veya başka bir WireGuard sunucusundan alınmış geçerli yapılandırma gerekir. Railway için yapılandırma dosyasının base64 karşılığı `MP4_VPN_CONFIG_B64` adlı gizli ortam değişkenine, iki harfli ülke etiketi de isteğe bağlı `MP4_VPN_COUNTRY` değişkenine yazılır. Gizli değeri GitHub'a, frontend'e veya sohbete ekleme. Uygulama bunu yalnız ihtiyaç anında 0600 izinli geçici dosyaya açar ve son VPN işi bittiğinde siler.
+Açık kaynak istemci tek başına ülke çıkış IP'si sağlamaz. Proton veya başka bir WireGuard sunucusundan alınmış geçerli yapılandırma gerekir. Railway için yapılandırma dosyasının base64 karşılığı `MP4_VPN_CONFIG_B64` adlı gizli ortam değişkenine, sağlayıcı etiketi `MP4_VPN_PROVIDER` değişkenine ve iki harfli ülke etiketi isteğe bağlı `MP4_VPN_COUNTRY` değişkenine yazılır. Gizli değeri GitHub'a, frontend'e veya sohbete ekleme. Uygulama bunu yalnız ihtiyaç anında 0600 izinli geçici dosyaya açar ve son VPN işi bittiğinde siler.
 
 ```bash
-base64 -w0 proton.conf
+base64 -w0 wireguard.conf
 ```
 
 Production imajının varsayılanları `MP4_VPN_AUTO=1` ve `MP4_VPN_MODE=wireproxy` değerleridir. Yapılandırma değişkeni yoksa uygulama doğrudan bağlantıyla normal çalışır ve VPN'i başlatmaz.
 
 ### Yerel Docker için bir defalık hazırlık
 
-1. [Proton hesabından Linux için WireGuard yapılandırması indir](https://protonvpn.com/support/wireguard-configurations). Hesabının erişebildiği, kaynağın açık olduğu bir sunucuyu seç. `.conf` dosyası gizli anahtar içerir; GitHub'a veya sohbete ekleme.
+1. VPN sağlayıcından standart bir WireGuard yapılandırması indir. Ücretsiz başlangıç seçeneği olarak [Proton Free yapılandırma adımları](https://protonvpn.com/support/wireguard-configurations) kullanılabilir. Hesabının erişebildiği, kaynağın açık olduğu bir sunucuyu seç. `.conf` dosyası gizli anahtar içerir; GitHub'a veya sohbete ekleme.
 2. Gluetun imajını hazırla:
 
    ```bash
@@ -129,14 +129,14 @@ Production imajının varsayılanları `MP4_VPN_AUTO=1` ve `MP4_VPN_MODE=wirepro
 3. İndirilen dosyayı proje kökünden içe aktar:
 
    ```bash
-   .venv/bin/python -m app.configure_vpn /tam/yol/proton.conf
+   .venv/bin/python -m app.configure_vpn /tam/yol/wireguard.conf
    ```
 
 Dosya doğrulanarak `.data/proton/wg0.conf` konumuna 0600 izinleriyle kaydedilir. Mevcut geçerli ayar, hatalı dosya içe aktarılırsa korunur. Dosya bulunmadığında uygulama normal bağlantıyla çalışır ve VPN başlatmaz. Dosya eklendikten sonra sonraki işlem otomatik kullanabilir; sunucuyu yeniden başlatmak gerekmez. Tamamen devre dışı bırakmak için sunucuyu `MP4_VPN_AUTO=0` ortam değişkeniyle başlat. Bu Gluetun adımları yalnız `MP4_VPN_MODE=docker` kullanılan yerel sunucular içindir; Railway production bunlara ihtiyaç duymaz.
 
-Proton masaüstü uygulamasını kurmak veya elle açmak bu yapılandırmanın yerini almaz. Arayüzde “Otomatik VPN ayarlanmamış” görünüyorsa uygulama kendi tünelini açamaz. Uygun erişim hatalarında logdaki `vpn_unconfigured` kaydı ve kullanıcıya gösterilen mesaj bu eksikliği belirtir.
+Bir VPN sağlayıcısının masaüstü uygulamasını kurmak veya elle açmak bu yapılandırmanın yerini almaz. Arayüzde “Otomatik VPN ayarlanmamış” görünüyorsa uygulama kendi tünelini açamaz. Uygun erişim hatalarında logdaki `vpn_unconfigured` kaydı ve kullanıcıya gösterilen mesaj bu eksikliği belirtir.
 
-Proton'un çift adresli dosyası içe aktarılırken yalnız uygulamaya ait kopyadaki `Interface.Address` IPv4 ile sınırlandırılır; indirdiğin özgün dosya değiştirilmez. Böylece IPv6 desteği kapalı ortamlarda başlangıç sorunu önlenir. Yalnız IPv6 adresi içeren yapılandırmalar kabul edilmez.
+Çift adresli dosya içe aktarılırken yalnız uygulamaya ait kopyadaki `Interface.Address` IPv4 ile sınırlandırılır; indirdiğin özgün dosya değiştirilmez. Böylece IPv6 desteği kapalı ortamlarda başlangıç sorunu önlenir. Yalnız IPv6 adresi içeren yapılandırmalar kabul edilmez.
 
 ```bash
 MP4_VPN_AUTO=0 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
@@ -144,9 +144,9 @@ MP4_VPN_AUTO=0 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 
 
 ### İşlem davranışı
 
-- Önce doğrudan bağlantı denenir. Bölge engeli, genel HTTP 403, ağ/TLS bağlantısı veya sayfa ayrıştırma sorunu uygun olduğunda **bir kez** Proton üzerinden denenir. Bu davranış ilk URL analizi için de geçerlidir; TLS doğrulaması kapatılmaz. Her 403 veya ayrıştırma sorunu ülke engeli anlamına gelmez. CAPTCHA/bot doğrulaması, giriş, 429, DRM, bulunamayan dosya ve boyut sınırı VPN'i tetiklemez. Dönüştürme aşamasının zaman aşımı da VPN'i başlatmaz.
+- Önce doğrudan bağlantı denenir. Bölge engeli, genel HTTP 403, ağ/TLS bağlantısı veya sayfa ayrıştırma sorunu uygun olduğunda **bir kez** VPN üzerinden denenir. Bu davranış ilk URL analizi için de geçerlidir; TLS doğrulaması kapatılmaz. Her 403 veya ayrıştırma sorunu ülke engeli anlamına gelmez. CAPTCHA/bot doğrulaması, giriş, 429, DRM, bulunamayan dosya ve boyut sınırı VPN'i tetiklemez. Dönüştürme aşamasının zaman aşımı da VPN'i başlatmaz.
 - Doğrudan analiz, VPN yapılandırılmışsa 35 saniye ile sınırlanır; kalan analiz bütçesi VPN açılışı ve ikinci denemeye ayrılır. Toplam analiz bütçesi 90 saniye, indirme bütçesi 15 dakikadır. Temizlik için ayrıca sınırlı süre gerekebilir.
-- VPN'de bulunan kaynağın indirmesi ve devam ettirilmesi yine VPN'den yapılır. VPN denemesi başarısızsa sessizce doğrudan bağlantıya dönülmez. API/arayüzde `route: proton` görünür; adres, parola ve anahtar görünmez.
+- VPN'de bulunan kaynağın indirmesi ve devam ettirilmesi yine VPN'den yapılır. VPN denemesi başarısızsa sessizce doğrudan bağlantıya dönülmez. API/arayüzde `route: vpn` görünür; adres, parola ve anahtar görünmez. Eski `route: proton` kayıtları geçiş uyumluluğu için kabul edilir.
 - İlk ihtiyaçta WireProxy süreci açılır ve tünel üzerinden gerçek bir HTTP CONNECT isteğiyle sağlığı doğrulanır. Eşzamanlı işler tek bağlantıyı paylaşır. Son iş başarıyla bittiğinde, hata aldığında, duraklatıldığında veya iptal edildiğinde süreç kapatılır ve geçici sırlar silinir. Bir işin bitmesi diğerinin tünelini kapatmaz.
 - Proxy yalnız `127.0.0.1:18989` üzerinde yayımlanır ve her başlangıçta yeni parola alır. Parola ile WireGuard anahtarı yalnız 0600 izinli geçici dosyalarda tutulur; worker'a stdin üzerinden iletilir ve işlem argümanlarına yazılmaz. Yerel Docker modunda Gluetun güvenlik duvarı da açık kalır.
 - VPN modunda DNS sorguları da tünelin içinden [Cloudflare DoH](https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-https/make-api-requests/dns-json/) ile yapılır. TLS doğrulanır, genel IP'ler kontrol edilir ve HTTP CONNECT hedefi doğrulanan sayısal IP'ye sabitlenir. Özel ağ/metadata IP'leri, yönlendirmeler ve karışık DNS yanıtları VPN'de de engellenir. Yerel DNS'e veya doğrudan ağa sessiz geri dönüş yapılmaz.
@@ -157,4 +157,4 @@ MP4_VPN_AUTO=0 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 
 
 Uygulama tek sunucu süreci içindir. Free-Web-Tools'a çok kullanıcılı dağıtım yapılırken kuyruk, VPN bağlantı sayacı, kullanıcı kotaları ve yetkilendirme merkezi servis olarak ele alınmalıdır. Şimdiki değişiklik o repoya otomatik dağıtım yapmaz.
 
-Production entegrasyonu [WireProxy](https://github.com/windtf/wireproxy), yerel Docker alternatifi ise [Gluetun özel WireGuard sağlayıcısı](https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/custom.md) ve [HTTP proxy](https://github.com/qdm12/gluetun-wiki/blob/main/setup/options/http-proxy.md) belgelerine dayanır. Proton anahtarı olmadan testler yerel proxy/TLS düzenekleriyle çalışır; gerçek Proton çıkışı ayrıca doğrulanmalıdır.
+Production entegrasyonu [WireProxy](https://github.com/windtf/wireproxy), yerel Docker alternatifi ise [Gluetun özel WireGuard sağlayıcısı](https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/custom.md) ve [HTTP proxy](https://github.com/qdm12/gluetun-wiki/blob/main/setup/options/http-proxy.md) belgelerine dayanır. Gerçek sağlayıcı anahtarı olmadan testler yerel proxy/TLS düzenekleriyle çalışır; gerçek VPN çıkışı ayrıca doğrulanmalıdır.
