@@ -109,7 +109,7 @@ Canlı siteler zamanla değiştiği için bu testler belirli bir sitenin her zam
 
 ### Tor modu (ücretsiz başlangıç)
 
-Production imajında Tor ve Privoxy bulunur; root, TUN aygıtı, hesap veya anahtar gerekmez. `MP4_VPN_MODE=tor` ile Tor web sağlık kontrolünü geciktirmeden arka planda hazırlanır ve yalnız uygun doğrudan bağlantı hatalarından sonra worker trafiğinde kullanılır. `MP4_TOR_EXIT_COUNTRIES=nl,fr,ro` iki harfli çıkış ülkelerini tercih eder. Varsayılan `MP4_TOR_STRICT_NODES=0`, seçili ülkelerde uygun çıkış bulunamazsa Tor'un çalışan başka bir çıkış kullanabilmesini sağlar; kesin ülke zorlaması gerekirse `1` yapılabilir fakat ilk bağlantıyı geciktirebilir. Tor bir anonimlik garantisi değildir, büyük dosyalarda yavaş olabilir ve bazı kaynaklar bilinen Tor çıkışlarını engeller.
+Production imajında Tor, ülke eşlemesi için `tor-geoipdb` ve HTTP CONNECT katmanı olarak Privoxy bulunur; root, TUN aygıtı, hesap veya anahtar gerekmez. `MP4_VPN_MODE=tor` ile Tor web sağlık kontrolünü geciktirmeden arka planda hazırlanır ve yalnız uygun doğrudan bağlantı hatalarından sonra worker trafiğinde kullanılır. `MP4_TOR_EXIT_COUNTRIES=nl,fr,ro` iki harfli çıkış ülkelerini tercih eder. Varsayılan `MP4_TOR_STRICT_NODES=0`, seçili ülkelerde uygun çıkış bulunamazsa Tor'un çalışan başka bir çıkış kullanabilmesini sağlar; kesin ülke zorlaması gerekirse `1` yapılabilir fakat ilk bağlantıyı geciktirebilir. Tor bir anonimlik garantisi değildir, büyük dosyalarda yavaş olabilir ve bazı kaynaklar bilinen Tor çıkışlarını engeller.
 
 Railway için başlangıç ayarları:
 

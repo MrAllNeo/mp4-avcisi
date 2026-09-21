@@ -105,6 +105,36 @@ def test_tor_mode_needs_no_wireguard_secret_and_reports_exits(tmp_path, monkeypa
                       'configured': True, 'state': 'idle', 'active_jobs': 0}
 
 
+def test_tor_readiness_uses_remote_hostname_resolution(tmp_path, monkeypatch):
+    monkeypatch.setenv('MP4_VPN_MODE', 'tor')
+    gateway = VpnGateway(tmp_path)
+    written = []
+
+    class Reader:
+        async def readuntil(self, separator):
+            return b'HTTP/1.1 200 Connection established\r\n\r\n'
+
+    class Writer:
+        def write(self, value):
+            written.append(value)
+        async def drain(self):
+            pass
+        def close(self):
+            pass
+        async def wait_closed(self):
+            pass
+
+    async def connect(host, port):
+        assert (host, port) == ('127.0.0.1', 18989)
+        return Reader(), Writer()
+
+    monkeypatch.setattr(asyncio, 'open_connection', connect)
+    asyncio.run(gateway.proxy_ready('mp4', 'secret'))
+    request = b''.join(written)
+    assert b'CONNECT check.torproject.org:443' in request
+    assert b'CONNECT 1.1.1.1:443' not in request
+
+
 @pytest.mark.parametrize('countries', ['', 'netherlands', 'nl,12', 'nl,fr,ro,de,us,ca,gb,es,it'])
 def test_tor_rejects_invalid_exit_country_list(tmp_path, monkeypatch, countries):
     monkeypatch.setenv('MP4_VPN_MODE', 'tor')

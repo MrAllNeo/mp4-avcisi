@@ -165,8 +165,9 @@ class VpnGateway:
         reader, writer = await asyncio.open_connection('127.0.0.1', PROXY_PORT)
         try:
             token = base64.b64encode(f'{username}:{password}'.encode()).decode()
-            writer.write((f'CONNECT 1.1.1.1:443 HTTP/1.1\r\n'
-                          f'Host: 1.1.1.1:443\r\nProxy-Authorization: Basic {token}\r\n\r\n').encode())
+            target = 'check.torproject.org' if self.mode == 'tor' else '1.1.1.1'
+            writer.write((f'CONNECT {target}:443 HTTP/1.1\r\n'
+                          f'Host: {target}:443\r\nProxy-Authorization: Basic {token}\r\n\r\n').encode())
             await writer.drain()
             response = await reader.readuntil(b'\r\n\r\n')
             if not response.startswith((b'HTTP/1.1 200', b'HTTP/1.0 200')):
