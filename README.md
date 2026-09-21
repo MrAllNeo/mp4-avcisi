@@ -81,6 +81,8 @@ grep 'İŞ_KİMLİĞİ' .data/logs/events.jsonl*
 
 `stage_started` ve `ffmpeg_finished` olayları kaynak çözümleme, indirme, inceleme, MP4'e aktarım ve dönüşüm aşamalarını ayırır. FFmpeg çıkış kodu ve bilinen hata sınıfı kaydedilir; ham stderr kaydedilmez. `ffmpeg -i` incelemesinin çıkış kodu 1 olabilir; tek başına indirme başarısızlığı değildir. Sonuç için `job_finished.status` ve `job_failed.code` alanlarına bak.
 
+Geçici testlerde `MP4_TEST_DETAILS=1` ayarlanırsa her indirme kartındaki **Test ayrıntıları** düğmesi yalnız o işe ait güvenli tanı zaman çizelgesini gösterir. Kaynak URL'leri, cookie/token değerleri ve uzak sunucu yanıt gövdeleri API'ye veya arayüze gönderilmez. PornHub/XVideos analizinden kalan imzalı akış adresi 403/410 dönerse indirme, sayfayı aynı özel oturumla bir kez yeniden çözümler.
+
 Hata yığınında yalnız kod dosyası, fonksiyon ve satır numarası bulunur; istisna metni, yerel değişkenler, kaynak URL'si, başlık, cookie, token veya sunucu yanıtı yazılmaz. Worker stderr'i bellekte en fazla son 16 KiB tutularak sınıflandırılır. Log dosyası 2 MiB'de döndürülür ve üç yedek saklanır (yaklaşık 8 MiB toplam); dizin 0700, dosyalar 0600 izinlidir. Logların tek yazıcısı API sürecidir. İşlerin bir saatlik temizliği logları silmez; loglar boyut sınırıyla döner.
 
 `worker_failed.causes`, yt-dlp'nin `exc_info`/`cause` alanları dahil en fazla sekiz bağlı istisnanın türünü ve varsa HTTP hata kodunu tutar. Ham hata metni kaydedilmez. `source_parse` sayfa yanıtının çözümlenemediğini, `tls_failed` güvenli bağlantı sorununu ayırır. Geçmişte yalnız `source_failed` olarak yazılmış kayıtların asıl nedeni geriye dönük çıkarılamaz; aynı kaynak yeniden denenmelidir.

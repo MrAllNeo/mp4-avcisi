@@ -4,7 +4,7 @@ import time
 from fastapi.testclient import TestClient
 import pytest
 
-from app import main
+from app import diagnostics, main
 
 
 @pytest.fixture
@@ -115,3 +115,23 @@ def test_unknown_analysis_error_explains_stage_and_missing_vpn(client, monkeypat
     assert 'video bilgileri' in response.json()['detail']
     assert 'yapılandırılmamış' in response.json()['detail']
     assert 'private-source-url' not in response.text
+
+
+def test_test_details_endpoint_is_gated_and_safe(client, monkeypatch, tmp_path):
+    key = 'e' * 32
+    main.jobs[key] = main.Job(key, 'https://secret.example/video?token=hidden', 'Private title', None)
+    diagnostics.configure(tmp_path / 'logs')
+    diagnostics.record('request_failed', job_id=key, resource='manifest', method='GET',
+                       http_status=410, url='https://secret.example/token',
+                       headers={'Cookie': 'hidden'})
+
+    assert client.get(f'/api/downloads/{key}/events').status_code == 404
+    monkeypatch.setenv('MP4_TEST_DETAILS', '1')
+    response = client.get(f'/api/downloads/{key}/events')
+
+    assert response.status_code == 200
+    assert response.json()['events'][0]['http_status'] == 410
+    assert response.json()['events'][0]['resource'] == 'manifest'
+    assert 'https://' not in response.text
+    assert 'hidden' not in response.text
+    assert client.get('/api/downloads').json()['test_details'] is True

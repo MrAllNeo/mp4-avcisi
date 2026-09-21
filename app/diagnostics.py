@@ -43,7 +43,7 @@ EVENTS = set('server_started server_stopped job_queued job_started job_finished 
              'ffmpeg_failed legacy_failure vpn_starting vpn_connected vpn_stopped '
              'vpn_cleanup_failed vpn_fallback vpn_unconfigured engine_ready '
              'request_finished request_failed routing_failed browser_transport '
-             'analysis_reused'.split())
+             'analysis_reused analysis_refresh'.split())
 
 
 class PrivateRotatingHandler(RotatingFileHandler):
@@ -123,3 +123,35 @@ def record(event, *, exc=None, **fields):
         fields.update(exception_fields(exc))
     entry = {'time': datetime.now(timezone.utc).isoformat(), 'event': event, **safe_fields(fields)}
     logger.info(json.dumps(entry, ensure_ascii=False, allow_nan=False))
+
+
+def job_events(job_id, limit=160):
+    """Return bounded, already-sanitized diagnostics for one visible job."""
+    if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
+        return []
+    handler = next((item for item in logger.handlers if isinstance(item, PrivateRotatingHandler)), None)
+    if handler is None:
+        return []
+    base = Path(handler.baseFilename)
+    paths = [base.with_name(f'{base.name}.{index}') for index in range(handler.backupCount, 0, -1)] + [base]
+    result = []
+    for path in paths:
+        try:
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > handler.maxBytes + 65536:
+                continue
+            lines = path.read_text(encoding='utf-8').splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                entry = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(entry, dict) or entry.get('job_id') != job_id or entry.get('event') not in EVENTS:
+                continue
+            timestamp = entry.get('time')
+            clean = {'event': entry['event'], **safe_fields(entry)}
+            if isinstance(timestamp, str) and re.fullmatch(r'[0-9T:.+\-]{20,40}', timestamp):
+                clean['time'] = timestamp
+            result.append(clean)
+    return result[-max(1, min(int(limit), 200)):]

@@ -67,3 +67,27 @@ def test_nested_http_status_is_logged_without_response_or_url(tmp_path):
 def test_cause_metadata_rejects_arbitrary_values():
     safe = diagnostics.safe_fields({'causes': [{'exception_type': 'https://secret', 'http_status': 'secret', 'message': 'secret'}]})
     assert safe == {'causes': [{}]}
+
+
+def test_job_events_are_filtered_bounded_and_sanitized(tmp_path):
+    diagnostics.configure(tmp_path)
+    target = 'c' * 32
+    diagnostics.record('request_failed', job_id=target, resource='manifest', method='GET',
+                       http_status=410, elapsed_ms=42, url='https://secret.example/token')
+    diagnostics.record('job_failed', job_id='d' * 32, code='not_found')
+    path = tmp_path / 'events.jsonl'
+    with path.open('a', encoding='utf-8') as stream:
+        stream.write('{not-json}\n')
+        stream.write(json.dumps({'time': '2026-09-21T08:06:00+00:00', 'event': 'job_failed',
+                                 'job_id': target, 'code': 'not_found',
+                                 'url': 'https://secret.example/token'}) + '\n')
+
+    result = diagnostics.job_events(target)
+
+    assert [event['event'] for event in result] == ['request_failed', 'job_failed']
+    assert result[0]['resource'] == 'manifest'
+    assert result[0]['http_status'] == 410
+    assert result[0]['elapsed_ms'] == 42
+    assert all(event['job_id'] == target for event in result)
+    assert 'https://' not in json.dumps(result)
+    assert 'url' not in json.dumps(result)

@@ -128,3 +128,56 @@ def test_pipeline_falls_back_to_transcode_and_only_reports_valid_result(tmp_path
     assert len(commands) == 3
     assert any(e.get('fields', {}).get('stage') == 'transcode' for e in emitted)
     assert any(e['event'] == 'result' for e in emitted) is transcode_ok
+
+
+def test_stale_browser_manifest_is_refreshed_once(tmp_path, monkeypatch, capsys):
+    import yt_dlp
+
+    worker.private_file(tmp_path / worker.PLAN_FILE, {
+        'webpage_url': 'https://www.pornhub.com/view_video.php?viewkey=test',
+        'extractor': 'PornHub',
+    })
+    calls = []
+
+    class Downloader:
+        def __init__(self, options):
+            self.options = options
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def process_ie_result(self, plan, download):
+            calls.append('cached')
+            (tmp_path / 'source.mp4.part').write_bytes(b'stale')
+            raise yt_dlp.utils.DownloadError('HTTP Error 410: Gone')
+        def extract_info(self, url, download):
+            calls.append('fresh')
+            (tmp_path / 'source.mp4').write_bytes(b'fixture')
+            return {'title': 'fixture'}
+
+    monkeypatch.setattr(yt_dlp, 'YoutubeDL', Downloader)
+    monkeypatch.setattr(worker, 'trace_requests', lambda *args: None)
+    monkeypatch.setattr(worker, 'guard_network', lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker, 'get_ffmpeg', lambda: 'ffmpeg')
+    monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps({
+        'mode': 'download',
+        'url': 'https://www.pornhub.com/view_video.php?viewkey=test',
+        'directory': str(tmp_path),
+    })))
+
+    commands = []
+    def ffmpeg(command, **kwargs):
+        commands.append(command)
+        if len(commands) == 1:
+            return subprocess.CompletedProcess(command, 1, b'', b'Duration: 00:00:02.00')
+        (tmp_path / 'video.mp4').write_bytes(b'mp4')
+        return subprocess.CompletedProcess(command, 0, b'', b'')
+    monkeypatch.setattr(worker.subprocess, 'run', ffmpeg)
+
+    worker.run()
+
+    emitted = events(capsys)
+    assert calls == ['cached', 'fresh']
+    assert not (tmp_path / 'source.mp4.part').exists()
+    assert any(event.get('name') == 'analysis_refresh' for event in emitted)
+    assert any(event.get('event') == 'result' for event in emitted)
