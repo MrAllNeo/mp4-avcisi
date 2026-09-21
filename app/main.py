@@ -106,13 +106,15 @@ async def lifespan(app):
     changing.clear()
     diagnostics.record('server_started', count=len(jobs))
     cleaner = asyncio.create_task(reap())
+    prewarmer = asyncio.create_task(gateway.prewarm())
     yield
     cleaner.cancel()
+    prewarmer.cancel()
     pending = list(tasks.items())
     for key, task in pending:
         stop_reasons[key] = 'paused'
         task.cancel()
-    await asyncio.gather(cleaner, *(task for _, task in pending), return_exceptions=True)
+    await asyncio.gather(cleaner, prewarmer, *(task for _, task in pending), return_exceptions=True)
     # A task can be cancelled before its coroutine has entered its try/finally.
     for key, _ in pending:
         if jobs[key].status in ACTIVE:

@@ -109,7 +109,7 @@ Canlı siteler zamanla değiştiği için bu testler belirli bir sitenin her zam
 
 ### Tor modu (ücretsiz başlangıç)
 
-Production imajında Tor ve Privoxy bulunur; root, TUN aygıtı, hesap veya anahtar gerekmez. `MP4_VPN_MODE=tor` ile yalnız uygun doğrudan bağlantı hatalarından sonra Tor açılır. `MP4_TOR_EXIT_COUNTRIES=nl,fr,ro` iki harfli çıkış ülkelerini sınırlar; `StrictNodes` kullanıldığı için bu ülkelerde uygun çıkış bulunamazsa bağlantı başarısız olur. Tor bir anonimlik garantisi değildir, büyük dosyalarda yavaş olabilir ve bazı kaynaklar bilinen Tor çıkışlarını engeller.
+Production imajında Tor ve Privoxy bulunur; root, TUN aygıtı, hesap veya anahtar gerekmez. `MP4_VPN_MODE=tor` ile Tor web sağlık kontrolünü geciktirmeden arka planda hazırlanır ve yalnız uygun doğrudan bağlantı hatalarından sonra worker trafiğinde kullanılır. `MP4_TOR_EXIT_COUNTRIES=nl,fr,ro` iki harfli çıkış ülkelerini sınırlar; `StrictNodes` kullanıldığı için bu ülkelerde uygun çıkış bulunamazsa bağlantı başarısız olur. Tor bir anonimlik garantisi değildir, büyük dosyalarda yavaş olabilir ve bazı kaynaklar bilinen Tor çıkışlarını engeller.
 
 Railway için başlangıç ayarları:
 
@@ -118,9 +118,11 @@ MP4_VPN_AUTO=1
 MP4_VPN_MODE=tor
 MP4_VPN_PROVIDER=tor
 MP4_TOR_EXIT_COUNTRIES=nl,fr,ro
+MP4_TOR_PERSISTENT=1
+MP4_TOR_BOOTSTRAP_TIMEOUT=120
 ```
 
-Tor yalnız `127.0.0.1` üzerinde çalışan SOCKS bağlantısını yine yalnız yereldeki Privoxy HTTP CONNECT katmanına açar. Uygulamanın geri kalanı ve sunucunun genel rotası değiştirilmez. Son alternatif ağ işi bitince iki süreç de kapatılır; bir sonraki ihtiyaçta yeni Tor devresi kurulur.
+Tor yalnız `127.0.0.1` üzerinde çalışan SOCKS bağlantısını yine yalnız yereldeki Privoxy HTTP CONNECT katmanına açar. Uygulamanın geri kalanı ve sunucunun genel rotası değiştirilmez. Production varsayılanında bağlantı ilk isteğin süresini tüketmemesi için işler arasında açık tutulur ve normal sunucu kapanışında kapatılır. `MP4_TOR_PERSISTENT=0` yapılırsa son alternatif ağ işi bittiğinde iki süreç de kapanır. Güvenli tanı logunda `tor_bootstrap` yüzdeleri ve hazırlama başarısızlığı tutulur; kullanıcıya dönen teknik ayrıntı zaman aşımındaki son yüzdeyi içerir.
 
 ### WireGuard modu
 

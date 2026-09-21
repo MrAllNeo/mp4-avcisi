@@ -124,6 +124,7 @@ def test_tor_starts_private_local_proxy_and_cleans_up(tmp_path, monkeypatch):
     monkeypatch.setenv('MP4_TOR_BINARY', str(tor_binary))
     monkeypatch.setenv('MP4_PRIVOXY_BINARY', str(privoxy_binary))
     monkeypatch.setenv('MP4_TOR_EXIT_COUNTRIES', 'nl,fr,ro')
+    monkeypatch.setenv('MP4_TOR_PERSISTENT', '0')
     gateway = VpnGateway(tmp_path / 'gateway')
     calls = []
 
@@ -161,6 +162,36 @@ def test_tor_starts_private_local_proxy_and_cleans_up(tmp_path, monkeypatch):
     asyncio.run(scenario())
     assert calls[0][0][:2] == (str(tor_binary), '-f')
     assert calls[1][0][:2] == (str(privoxy_binary), '--no-daemon')
+
+
+def test_persistent_tor_prewarm_is_reused_until_shutdown(tmp_path, monkeypatch):
+    monkeypatch.setenv('MP4_VPN_MODE', 'tor')
+    monkeypatch.setenv('MP4_TOR_PERSISTENT', '1')
+    gateway = VpnGateway(tmp_path)
+    actions = []
+
+    async def start():
+        actions.append('start')
+        gateway.proxy = {'host': '127.0.0.1', 'port': 18989}
+        gateway.state = 'connected'
+
+    async def stop():
+        actions.append('stop')
+        gateway.proxy = None
+        gateway.state = 'idle'
+
+    monkeypatch.setattr(gateway, 'start', start)
+    monkeypatch.setattr(gateway, 'stop', stop)
+
+    async def scenario():
+        await gateway.prewarm()
+        async with gateway.connection() as proxy:
+            assert proxy['port'] == 18989
+        assert gateway.state == 'connected' and gateway.users == 0
+        await gateway.stop()
+
+    asyncio.run(scenario())
+    assert actions == ['start', 'stop']
 
 
 def test_ipv6_only_import_preserves_existing_config(tmp_path):

@@ -88,6 +88,17 @@ class VpnGateway:
         return countries
 
     @property
+    def persistent(self):
+        return self.mode == 'tor' and os.environ.get('MP4_TOR_PERSISTENT', '1') == '1'
+
+    @property
+    def tor_bootstrap_timeout(self):
+        try:
+            return max(30, min(int(os.environ.get('MP4_TOR_BOOTSTRAP_TIMEOUT', '120')), 180))
+        except (TypeError, ValueError):
+            return 120
+
+    @property
     def configured(self):
         if os.environ.get('MP4_VPN_AUTO', '1') != '1':
             return False
@@ -192,11 +203,14 @@ class VpnGateway:
         data_directory.chmod(0o700)
         exits = ','.join(f'{{{country}}}' for country in self.tor_exit_countries)
         tor_config = self.root / 'torrc'
+        tor_log = self.root / 'tor-notice.log'
         privoxy_config = self.root / 'privoxy.conf'
+        tor_log.unlink(missing_ok=True)
         self.write_private(tor_config,
             f'ClientOnly 1\nSocksPort 127.0.0.1:{TOR_SOCKS_PORT}\n'
             f'DataDirectory {data_directory.resolve()}\nAvoidDiskWrites 1\n'
-            f'ExitNodes {exits}\nStrictNodes 1\n')
+            f'ExitNodes {exits}\nStrictNodes 1\n'
+            f'Log notice file {tor_log.resolve()}\n')
         self.write_private(privoxy_config,
             f'listen-address 127.0.0.1:{PROXY_PORT}\n'
             f'forward-socks5t / 127.0.0.1:{TOR_SOCKS_PORT} .\n'
@@ -209,17 +223,31 @@ class VpnGateway:
             self.privoxy_process = await asyncio.create_subprocess_exec(
                 self.privoxy_binary, '--no-daemon', str(privoxy_config),
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-            async with asyncio.timeout(50):
+            last_percent = -1
+            async with asyncio.timeout(self.tor_bootstrap_timeout):
                 while True:
                     if self.tor_process.returncode is not None or self.privoxy_process.returncode is not None:
-                        raise MediaError('vpn_unavailable', 'Tor alternatif bağlantısı başlatılamadı.', True)
+                        error = MediaError('vpn_unavailable', 'Tor alternatif bağlantısı başlatılamadı.', True)
+                        error.diagnostic = {'stage': 'startup', 'percent': max(0, last_percent)}
+                        raise error
+                    try:
+                        content = tor_log.read_text(encoding='utf-8')[-16384:]
+                        matches = re.findall(r'Bootstrapped (\d+)%', content)
+                        percent = int(matches[-1]) if matches else last_percent
+                        if percent != last_percent and percent >= 0:
+                            last_percent = percent
+                            diagnostics.record('tor_bootstrap', stage='startup', percent=percent)
+                    except OSError:
+                        pass
                     try:
                         await asyncio.wait_for(self.proxy_ready(username, password), timeout=8)
                         break
                     except (OSError, asyncio.IncompleteReadError, TimeoutError):
                         await asyncio.sleep(1)
         except TimeoutError:
-            raise MediaError('vpn_unavailable', 'Tor ağına bağlantı zaman aşımına uğradı.', True) from None
+            error = MediaError('vpn_unavailable', 'Tor ağına bağlantı zaman aşımına uğradı.', True)
+            error.diagnostic = {'stage': 'startup', 'percent': max(0, locals().get('last_percent', -1))}
+            raise error from None
         except OSError:
             raise MediaError('vpn_unavailable', 'Tor alternatif bağlantısı çalıştırılamadı.', True) from None
 
@@ -323,7 +351,7 @@ class VpnGateway:
         finally:
             self.proxy = None
             try:
-                for name in ('proxy.env', 'wireproxy.conf', 'torrc', 'privoxy.conf'):
+                for name in ('proxy.env', 'wireproxy.conf', 'torrc', 'privoxy.conf', 'tor-notice.log'):
                     (self.root / name).unlink(missing_ok=True)
                 if self.env_config_written:
                     self.config.unlink(missing_ok=True)
@@ -335,13 +363,32 @@ class VpnGateway:
     async def release(self):
         async with self.lock:
             self.users -= 1
-            if self.users == 0:
+            if self.users == 0 and not self.persistent:
+                await self.stop()
+
+    async def prewarm(self):
+        """Prepare persistent Tor without delaying the web health check."""
+        if not self.configured or not self.persistent:
+            return
+        async with self.lock:
+            if self.proxy is not None:
+                return
+            try:
+                await self.start()
+            except asyncio.CancelledError:
+                await self.stop()
+                raise
+            except Exception as exc:
+                error = exc if isinstance(exc, MediaError) else MediaError('vpn_unavailable', 'Tor bağlantısı hazırlanamadı.', True)
+                detail = getattr(error, 'diagnostic', {})
+                diagnostics.record('vpn_prewarm_failed', code=error.code,
+                                   stage='startup', percent=detail.get('percent', 0))
                 await self.stop()
 
     @asynccontextmanager
     async def connection(self):
         async with self.lock:
-            if self.users == 0:
+            if self.users == 0 and self.proxy is None:
                 try:
                     await self.start()
                 except BaseException:

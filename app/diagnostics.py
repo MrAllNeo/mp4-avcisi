@@ -42,6 +42,7 @@ EVENTS = set('server_started server_stopped job_queued job_started job_finished 
              'stage_started progress size_limit source_warning source_error ffmpeg_finished '
              'ffmpeg_failed legacy_failure vpn_starting vpn_connected vpn_stopped '
              'vpn_cleanup_failed vpn_fallback vpn_unconfigured engine_ready '
+             'tor_bootstrap vpn_prewarm_failed '
              'request_finished request_failed routing_failed browser_transport '
              'analysis_reused analysis_refresh'.split())
 
