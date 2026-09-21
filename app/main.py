@@ -1,5 +1,7 @@
 import asyncio
+import base64
 from contextlib import asynccontextmanager
+import hmac
 import json
 import os
 from pathlib import Path
@@ -64,6 +66,9 @@ def cleanup_expired(now=None):
     for key, value in list(analyses.items()):
         if now - value['created'] > TTL:
             analyses.pop(key, None)
+            directory = value.get('directory')
+            if directory:
+                shutil.rmtree(directory, ignore_errors=True)
     for key, job in list(jobs.items()):
         if job.status not in ACTIVE and job.expires_at is not None and job.expires_at <= now:
             JobStore(DATA).remove(key)
@@ -88,6 +93,9 @@ async def lifespan(app):
     slots, analysis_slots = asyncio.Semaphore(2), asyncio.Semaphore(1)
     jobs.clear()
     jobs.update(JobStore(DATA).load())
+    # Analysis tokens live only in memory. A restarted server cannot safely
+    # associate old private plans with a browser, so discard those remnants.
+    shutil.rmtree(DATA / 'analyses', ignore_errors=True)
     analyses.clear()
     tasks.clear()
     stop_reasons.clear()
@@ -111,7 +119,9 @@ async def lifespan(app):
 
 
 app = FastAPI(title='TOYWES · MP4 Avcısı', lifespan=lifespan, docs_url=None, redoc_url=None)
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=['localhost', '127.0.0.1', '[::1]'])
+allowed_hosts = [host.strip() for host in os.environ.get(
+    'MP4_ALLOWED_HOSTS', 'localhost,127.0.0.1,[::1]').split(',') if host.strip()]
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
 
 @app.exception_handler(MediaError)
@@ -124,6 +134,14 @@ async def media_error_handler(request, error):
 
 @app.middleware('http')
 async def headers(request: Request, call_next):
+    access_user = os.environ.get('MP4_ACCESS_USER')
+    access_password = os.environ.get('MP4_ACCESS_PASSWORD')
+    if access_user and access_password and request.url.path != '/api/health':
+        supplied = request.headers.get('authorization', '')
+        expected = 'Basic ' + base64.b64encode(f'{access_user}:{access_password}'.encode()).decode()
+        if not hmac.compare_digest(supplied, expected):
+            return JSONResponse({'detail': 'Bu test yayını giriş istiyor.'}, status_code=401,
+                                headers={'WWW-Authenticate': 'Basic realm="MP4 Avcisi"'})
     if request.method in {'POST', 'DELETE'}:
         origin = request.headers.get('origin')
         if origin and origin != str(request.base_url).rstrip('/'):
@@ -446,21 +464,28 @@ async def analyze(body: AnalyzeInput):
         raise HTTPException(429, 'Başka bir bağlantı analiz ediliyor. Biraz sonra yeniden dene.')
     if len(analyses) >= 100:
         raise HTTPException(429, 'Analiz sınırına ulaşıldı. Biraz sonra yeniden dene.')
+    key = uuid4().hex
+    analysis_directory = DATA / 'analyses' / key
+    analysis_directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+    analysis_directory.chmod(0o700)
     try:
         async with analysis_slots:
-            result = await worker({'mode': 'analyze', 'url': body.url})
+            result = await worker({'mode': 'analyze', 'url': body.url,
+                                   'directory': str(analysis_directory)})
     except TimeoutError:
+        shutil.rmtree(analysis_directory, ignore_errors=True)
         raise HTTPException(504, 'Kaynak zamanında yanıt vermedi. Tekrar dene.') from None
     except Exception as exc:
+        shutil.rmtree(analysis_directory, ignore_errors=True)
         error = describe_error(exc)
         if error.code == 'source_failed' and not getattr(error, 'diagnostic', None):
             error.message = 'Sayfadan video bilgileri alınamadı. Kaynak çözümleme hatasının nedeni henüz belirlenemedi.'
             if not gateway.configured:
                 error.message += ' Otomatik Proton VPN de henüz yapılandırılmamış.'
         raise error from None
-    key = uuid4().hex
     route = result.get('route', 'direct')
-    analyses[key] = {'url': body.url, 'metadata': result['metadata'], 'created': time.time(), 'route': route}
+    analyses[key] = {'url': body.url, 'metadata': result['metadata'], 'created': time.time(),
+                     'route': route, 'directory': str(analysis_directory)}
     return {'id': key, **result['metadata'], 'route': route}
 
 
@@ -480,6 +505,21 @@ async def create_download(body: DownloadInput):
         raise HTTPException(429, 'İşlem listesi dolu. Eski işlemlerden birini silip yeniden dene.')
     job = Job(uuid4().hex, entry['url'], entry['metadata']['title'], body.height)
     job.route = entry.get('route', 'direct')
+    analysis_directory = Path(entry['directory']) if entry.get('directory') else None
+    if analysis_directory:
+        job_directory = DATA / job.id
+        try:
+            job_directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+            job_directory.chmod(0o700)
+            for name in ('analysis.json', 'session.cookies'):
+                source = analysis_directory / name
+                if source.is_file() and not source.is_symlink():
+                    destination = job_directory / name
+                    shutil.copyfile(source, destination)
+                    destination.chmod(0o600)
+        except OSError as exc:
+            shutil.rmtree(job_directory, ignore_errors=True)
+            raise describe_error(exc) from None
     jobs[job.id] = job
     start_job(job)
     return public_job(job)

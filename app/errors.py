@@ -64,7 +64,7 @@ def describe_error(error):
 def _describe_single_error(error):
     if isinstance(error, MediaError):
         return error
-    if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+    if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)) or type(error).__name__.lower() == 'timeout':
         return MediaError("timeout", "Kaynak zamanında yanıt vermedi. Biraz sonra yeniden dene.", True)
     if isinstance(error, OSError) and error.errno in {errno.ENOSPC, errno.EDQUOT}:
         return MediaError("disk_full", "Diskte yeterli yer yok. Yer açtıktan sonra yeniden dene.", True)

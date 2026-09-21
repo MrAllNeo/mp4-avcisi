@@ -8,6 +8,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import threading
 from urllib.parse import urlsplit
@@ -23,10 +24,12 @@ from app.errors import MediaError
 class RangeHandler(SimpleHTTPRequestHandler):
     ranges = []
     session_requests = []
+    session_page_requests = 0
 
     def do_GET(self):
         path = urlsplit(self.path).path
         if path == '/session.html':
+            type(self).session_page_requests += 1
             self.send_response(200)
             self.send_header('Content-Type', 'text/html')
             self.send_header('Set-Cookie', 'media_session=fixture-secret; Path=/; HttpOnly')
@@ -129,6 +132,41 @@ def test_public_page_session_and_referrer_survive_real_download(media_server, tm
     assert media and all(e['cookie_count'] >= 1 and e['has_referer'] for e in media)
     assert all(not e['user_agent_changed'] for e in media)
     assert (tmp_path / 'video.mp4').read_bytes()[4:8] == b'ftyp'
+
+
+def test_analysis_plan_reuses_session_without_refetching_source(media_server, tmp_path, monkeypatch, capsys):
+    analysis = tmp_path / 'analysis'
+    download = tmp_path / 'download'
+    analysis.mkdir()
+    download.mkdir()
+    RangeHandler.session_requests.clear()
+    RangeHandler.session_page_requests = 0
+    monkeypatch.setattr(worker, 'guard_network', lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker, 'validate_url', lambda url: url)
+
+    monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps({
+        'mode': 'analyze', 'url': f'{media_server}/session.html', 'directory': str(analysis),
+    })))
+    worker.run()
+    assert RangeHandler.session_page_requests == 1
+    assert (analysis / worker.PLAN_FILE).stat().st_mode & 0o777 == 0o600
+    assert (analysis / worker.COOKIE_FILE).stat().st_mode & 0o777 == 0o600
+
+    for name in (worker.PLAN_FILE, worker.COOKIE_FILE):
+        shutil.copyfile(analysis / name, download / name)
+        (download / name).chmod(0o600)
+    capsys.readouterr()
+    monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps({
+        'mode': 'download', 'url': f'{media_server}/session.html', 'directory': str(download),
+    })))
+    worker.run()
+
+    assert RangeHandler.session_page_requests == 1
+    assert RangeHandler.session_requests
+    assert 'media_session=fixture-secret' in RangeHandler.session_requests[-1].get('Cookie', '')
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert any(event.get('name') == 'analysis_reused' for event in events)
+    assert (download / 'video.mp4').read_bytes()[4:8] == b'ftyp'
 
 
 @pytest.mark.parametrize('source', ['sample.mp4', 'sample.m3u8'])
