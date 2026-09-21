@@ -34,6 +34,22 @@ def test_optional_basic_auth_keeps_health_public(client, monkeypatch):
     assert client.get('/', auth=('tester', 'private-pass')).status_code == 200
 
 
+def test_internal_token_allows_service_without_exposing_basic_auth(client, monkeypatch):
+    monkeypatch.setenv('MP4_ACCESS_USER', 'tester')
+    monkeypatch.setenv('MP4_ACCESS_PASSWORD', 'private-pass')
+    monkeypatch.setenv('MP4_INTERNAL_TOKEN', 'server-to-server-secret')
+
+    assert client.get('/api/downloads').status_code == 401
+    response = client.get(
+        '/api/downloads',
+        headers={'X-MP4-Internal-Token': 'server-to-server-secret'},
+    )
+
+    assert response.status_code == 200
+    assert 'server-to-server-secret' not in response.text
+    assert client.get('/api/health').status_code == 200
+
+
 def test_invalid_url_and_cross_origin(client):
     assert client.post("/api/analyze", json={"url": "file:///etc/passwd"}).status_code == 422
     assert client.post("/api/analyze", json={"url": "https://example.com"}, headers={"Origin": "https://attacker.example"}).status_code == 403

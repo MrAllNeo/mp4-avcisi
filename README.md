@@ -44,7 +44,7 @@ Doğrudan MP4, yt-dlp'nin desteklediği site/oynatıcılar ve yerel indiriciyle 
 ## Sınırlar ve dağıtım
 
 - Bu sürüm tek kullanıcı için **localhost** üzerinde çalışır; internete açık bir hizmet olarak yayımlanmamıştır. Host kontrolü localhost ile sınırlıdır.
-- Geçici uzaktan testlerde `MP4_ALLOWED_HOSTS` ile host listesi, `MP4_ACCESS_USER` ve `MP4_ACCESS_PASSWORD` ile HTTP Basic giriş zorunluluğu ayarlanabilir. `/api/health` sağlık kontrolü için açık kalır.
+- Geçici uzaktan testlerde `MP4_ALLOWED_HOSTS` ile host listesi, `MP4_ACCESS_USER` ve `MP4_ACCESS_PASSWORD` ile HTTP Basic giriş zorunluluğu ayarlanabilir. Ayrı bir sunucu proxy'si `MP4_INTERNAL_TOKEN` değerini `X-MP4-Internal-Token` başlığında göndererek aynı API'ye erişebilir; bu token tarayıcıya verilmemelidir. `/api/health` sağlık kontrolü için açık kalır.
 - DRM, giriş isteyen kaynaklar ve canlı yayınlar desteklenmez. JavaScript çalıştırarak ağ trafiği yakalama henüz eklenmemiştir. Bölgesel/ağ erişim hatalarında yapılandırılmış Proton VPN üzerinden bir alternatif deneme yapılabilir; giriş, CAPTCHA veya DRM kaldırılmaz.
 - Dosya başına varsayılan 2 GB kaynak sınırı, 2 saat video süresi, eşzamanlı iki indirme ve kuyruk beklemesi hariç en fazla 15 dakika hazırlama süresi vardır. Çalışanlar dahil en fazla 10 iş sıraya alınır; toplam 20 kayıt saklanır. Analiz için ayrı bir işlem yuvası bulunur. Kaynak sınırı `MP4_MAX_BYTES`, geçici işlem diski sınırı `MP4_MAX_DISK_BYTES` ile bayt cinsinden değiştirilebilir. Birleştirme/dönüşüm sonucunun boyutu kaynak boyutundan farklı olabilir.
 - Bitmiş, duraklatılmış, iptal edilmiş ve başarısız işler **son durum değişiminden bir saat sonra** temizlenir. Çalışan işin dosyası süre doldu diye silinmez. Temizleme her 60 saniyede ve API erişimlerinde yapılır.

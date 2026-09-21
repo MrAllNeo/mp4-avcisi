@@ -140,10 +140,16 @@ async def media_error_handler(request, error):
 async def headers(request: Request, call_next):
     access_user = os.environ.get('MP4_ACCESS_USER')
     access_password = os.environ.get('MP4_ACCESS_PASSWORD')
-    if access_user and access_password and request.url.path != '/api/health':
+    internal_token = os.environ.get('MP4_INTERNAL_TOKEN')
+    if (access_user and access_password or internal_token) and request.url.path != '/api/health':
         supplied = request.headers.get('authorization', '')
-        expected = 'Basic ' + base64.b64encode(f'{access_user}:{access_password}'.encode()).decode()
-        if not hmac.compare_digest(supplied, expected):
+        supplied_internal = request.headers.get('x-mp4-internal-token', '')
+        basic_allowed = bool(access_user and access_password)
+        expected = ('Basic ' + base64.b64encode(
+            f'{access_user}:{access_password}'.encode()).decode()) if basic_allowed else ''
+        basic_ok = basic_allowed and hmac.compare_digest(supplied, expected)
+        internal_ok = bool(internal_token) and hmac.compare_digest(supplied_internal, internal_token)
+        if not basic_ok and not internal_ok:
             return JSONResponse({'detail': 'Bu test yayını giriş istiyor.'}, status_code=401,
                                 headers={'WWW-Authenticate': 'Basic realm="MP4 Avcisi"'})
     if request.method in {'POST', 'DELETE'}:
