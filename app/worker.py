@@ -31,13 +31,18 @@ COOKIE_FILE = "session.cookies"
 BROWSER_DOMAINS = {
     "pornhub.com", "pornhub.net", "pornhub.org", "pornhubpremium.com",
     "xvideos.com", "xvideos2.com", "xvideos.es",
+    "eporner.com", "xhamster.com", "xhamster.one", "xhamster.desi",
+    "xhms.pro", "xhday.com", "xhvid.com", "brazzers.com",
 }
 
 
 def browser_site(url):
     """Browser impersonation is deliberately limited to supported public sites."""
     host = (urlsplit(url).hostname or "").lower().rstrip(".")
-    return any(host == domain or host.endswith("." + domain) for domain in BROWSER_DOMAINS)
+    if any(host == domain or host.endswith("." + domain) for domain in BROWSER_DOMAINS):
+        return True
+    # xHamster rotates numbered public domains (for example xhamster20.desi).
+    return bool(re.fullmatch(r'(?:[^.]+\.)*xhamster\d+\.(?:com|desi)', host))
 
 
 def private_file(path, data):
@@ -240,9 +245,9 @@ def run():
         "restrictfilenames": True,
         "cookiefile": str(cookie_file),
     }
-    # PornHub requests impersonation itself; XVideos benefits from a forced
-    # browser TLS fingerprint on deployments that receive reduced HTML. Native
-    # curl remains scoped to these known sites; other URLs keep the socket guard.
+    # These public video sites use browser TLS checks, rotating domains or
+    # incomplete certificate chains. Native curl remains scoped to known sites;
+    # other URLs keep the guarded Python transport.
     if browser_site(url):
         options["impersonate"] = ImpersonateTarget.from_str("chrome")
         if payload.get("vpn_proxy"):
@@ -296,9 +301,9 @@ def run():
             code = describe_error(exc).code
             if not plan or not browser_site(url) or code not in {"not_found", "access_denied"}:
                 raise
-            # PornHub/XVideos manifests and signed media URLs can become invalid
-            # immediately after analysis. Refresh once with the same private
-            # cookies and browser transport instead of claiming the video vanished.
+            # Signed manifests and media URLs can become invalid immediately
+            # after analysis. Refresh once with the same private cookies and
+            # browser transport instead of claiming the video vanished.
             diagnostic("analysis_refresh", code=code)
             for partial in directory.glob("source.*"):
                 if partial.is_file() and not partial.is_symlink():
