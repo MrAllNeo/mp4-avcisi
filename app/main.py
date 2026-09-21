@@ -539,12 +539,21 @@ def get_job(key):
 @app.get('/api/downloads')
 async def list_downloads():
     cleanup_expired()
-    return {'jobs': [public_job(j) for j in reversed(list(jobs.values()))], 'parallel_limit': 2, 'queue_limit': MAX_PENDING}
+    return {'jobs': [public_job(j) for j in reversed(list(jobs.values()))], 'parallel_limit': 2,
+            'queue_limit': MAX_PENDING, 'test_details': os.environ.get('MP4_TEST_DETAILS') == '1'}
 
 
 @app.get('/api/downloads/{key}')
 async def download_status(key: str):
     return public_job(get_job(key))
+
+
+@app.get('/api/downloads/{key}/events')
+async def download_events(key: str):
+    if os.environ.get('MP4_TEST_DETAILS') != '1':
+        raise HTTPException(404, 'Test ayrıntıları etkin değil.')
+    get_job(key)
+    return {'job_id': key, 'events': diagnostics.job_events(key)}
 
 
 async def stop_job(job, reason):
