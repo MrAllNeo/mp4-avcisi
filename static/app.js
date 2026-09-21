@@ -8,6 +8,7 @@ let refreshing = false;
 let refreshTimer;
 let failures = 0;
 let networkRefreshing = false;
+let testDetailsEnabled = false;
 const pendingActions = new Set();
 const cards = new Map();
 const labels = { queued: 'Sırada', processing: 'Hazırlanıyor', paused: 'Duraklatıldı', complete: 'Hazır', error: 'Tamamlanamadı', cancelled: 'İptal edildi' };
@@ -123,6 +124,59 @@ function actionButton(card, action, title, emphasized = false) {
   card.querySelector('.job-actions').append(button);
 }
 
+function renderDebugEvents(panel, events) {
+  panel.replaceChildren();
+  const notice = document.createElement('p');
+  notice.className = 'debug-notice';
+  notice.textContent = 'Güvenli test kaydı: URL, cookie, token ve sunucu yanıt gövdesi gösterilmez.';
+  panel.append(notice);
+  if (!events.length) {
+    const empty = document.createElement('p');
+    empty.className = 'debug-empty';
+    empty.textContent = 'Bu işlem için henüz ayrıntı kaydı yok.';
+    panel.append(empty);
+    return;
+  }
+  for (const event of events) {
+    const item = document.createElement('div');
+    item.className = `debug-event debug-${event.event}`;
+    const heading = document.createElement('strong');
+    const stamp = event.time ? new Date(event.time).toLocaleTimeString('tr-TR') : '--:--:--';
+    heading.textContent = `${stamp} · ${event.event}`;
+    const data = { ...event };
+    delete data.time;
+    delete data.event;
+    delete data.job_id;
+    for (const key of ['request_id', 'operation_id']) {
+      if (typeof data[key] === 'string') data[key] = data[key].slice(0, 8);
+    }
+    const body = document.createElement('pre');
+    body.textContent = JSON.stringify(data, null, 2);
+    item.append(heading, body);
+    panel.append(item);
+  }
+}
+
+async function toggleDebugDetails(card, button) {
+  const panel = card.querySelector('.job-debug');
+  if (!panel.hidden) {
+    panel.hidden = true;
+    button.textContent = 'Test ayrıntıları';
+    button.setAttribute('aria-expanded', 'false');
+    return;
+  }
+  panel.hidden = false;
+  button.textContent = 'Ayrıntıları kapat';
+  button.setAttribute('aria-expanded', 'true');
+  panel.textContent = 'Tanı kayıtları yükleniyor…';
+  try {
+    const data = await api(`/api/downloads/${card.dataset.id}/events`);
+    renderDebugEvents(panel, data.events || []);
+  } catch (error) {
+    panel.textContent = error.message;
+  }
+}
+
 function renderJob(job) {
   let card = cards.get(job.id);
   if (!card) {
@@ -130,7 +184,7 @@ function renderJob(job) {
     card.className = 'job-card';
     card.dataset.id = job.id;
     // All dynamic source text is assigned with textContent, never parsed as HTML.
-    card.innerHTML = '<div class="job-top"><span class="job-type" aria-hidden="true">MP4</span><h3></h3><span class="job-status"></span></div><p class="job-meta"></p><p class="job-message"></p><progress max="100" aria-label="Dosya hazırlama ilerlemesi"></progress><div class="job-bottom"><span class="job-expiry"></span><div class="job-actions"></div></div>';
+    card.innerHTML = '<div class="job-top"><span class="job-type" aria-hidden="true">MP4</span><h3></h3><span class="job-status"></span></div><p class="job-meta"></p><p class="job-message"></p><progress max="100" aria-label="Dosya hazırlama ilerlemesi"></progress><div class="job-debug" hidden></div><div class="job-bottom"><span class="job-expiry"></span><div class="job-actions"></div></div>';
     cards.set(job.id, card);
   }
   card.dataset.status = job.status;
@@ -144,7 +198,7 @@ function renderJob(job) {
   else progress.value = job.percent;
   card.querySelector('.job-expiry').textContent = job.expires_at ? `Temizlenme: ${new Date(job.expires_at * 1000).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}` : 'İşlem sürerken dosyalar saklanır.';
 
-  const signature = `${job.status}:${job.retryable}`;
+  const signature = `${job.status}:${job.retryable}:${testDetailsEnabled}`;
   if (card.dataset.actions !== signature) {
     const focusedAction = card.contains(document.activeElement) ? document.activeElement.dataset.action : null;
     card.querySelector('.job-actions').replaceChildren();
@@ -164,6 +218,7 @@ function renderJob(job) {
       if (job.retryable && ['paused', 'error'].includes(job.status)) actionButton(card, 'resume', job.status === 'paused' ? 'Devam et' : 'Yeniden dene', true);
       actionButton(card, 'purge', 'Sil');
     }
+    if (testDetailsEnabled) actionButton(card, 'details', 'Test ayrıntıları');
     card.dataset.actions = signature;
     if (focusedAction) card.querySelector(`[data-action="${focusedAction}"]`)?.focus({ preventScroll: true });
   }
@@ -198,6 +253,7 @@ async function refreshJobs() {
   try {
     const data = await api('/api/downloads');
     failures = 0;
+    testDetailsEnabled = Boolean(data.test_details);
     renderJobs(data.jobs);
     message('#queue-notice', '');
     if (data.jobs.some((job) => ['queued', 'processing'].includes(job.status))) delay = 1500;
@@ -217,6 +273,10 @@ $('#jobs-list').addEventListener('click', async (event) => {
   if (!button) return;
   const card = button.closest('.job-card');
   const key = card.dataset.id;
+  if (button.dataset.action === 'details') {
+    await toggleDebugDetails(card, button);
+    return;
+  }
   if (pendingActions.has(key)) return;
   pendingActions.add(key);
   card.querySelectorAll('button').forEach((control) => { control.disabled = true; });
