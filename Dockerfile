@@ -1,4 +1,4 @@
-FROM golang:1.24-bookworm AS wireproxy-builder
+FROM golang:1.26-bookworm AS wireproxy-builder
 
 RUN CGO_ENABLED=0 go install github.com/windtf/wireproxy/cmd/wireproxy@v1.1.2
 
