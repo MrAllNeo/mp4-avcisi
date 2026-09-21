@@ -26,7 +26,11 @@ from app.vpn import ProtonGateway, can_retry_via_vpn
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / '.data'
-MAX_DISK = 1100 * 1024 * 1024
+DEFAULT_MAX_DISK = 4600 * 1024 * 1024
+try:
+    MAX_DISK = max(1, int(os.environ.get('MP4_MAX_DISK_BYTES', DEFAULT_MAX_DISK)))
+except (TypeError, ValueError):
+    MAX_DISK = DEFAULT_MAX_DISK
 MAX_PENDING = 10
 MAX_JOBS = 20
 slots = asyncio.Semaphore(2)
