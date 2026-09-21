@@ -11,6 +11,7 @@ from app.errors import describe_error
     ('HTTP Error 429: Too Many Requests', 'rate_limited', True),
     ('HTTP Error 503', 'network', True),
     ('Login required', 'authentication', False),
+    ('Redirection detected; the video may be deleted or require login', 'access_denied', False),
     ('Unsupported URL', 'unsupported', False),
     ('DRM protected', 'protected', False),
     ('Connection reset by peer', 'network', True),
