@@ -2,7 +2,7 @@
 
 TOYWES (Toplum Yararına Web Siteleri) için video bağlantısını analiz eden, desteklenen herkese açık sayfalardaki gömülü kaynakları bulan ve MP4 dosyası hazırlayan yerel web uygulaması.
 
-Arayüz koyu tema kullanır. İsteğe bağlı ve sağlayıcıdan bağımsız WireGuard VPN bağlantısı, uygun erişim hatalarında otomatik devreye girer ve son kullanan işlem bittiğinde kapanır. PornHub, XVideos, Eporner ve xHamster gibi doğrulanmış herkese açık kaynaklarda yt-dlp'nin desteklediği Chrome TLS taklidi kullanılır; bunun için kilitli bağımlılıklarda `curl-cffi` bulunur. Brazzers için yalnız giriş istemeyen herkese açık video veya fragman sayfaları denenir; üyelik ya da DRM koruması aşılmaz.
+Arayüz koyu tema kullanır. İsteğe bağlı Tor veya sağlayıcıdan bağımsız WireGuard bağlantısı, uygun erişim hatalarında otomatik devreye girer ve son kullanan işlem bittiğinde kapanır. PornHub, XVideos, Eporner ve xHamster gibi doğrulanmış herkese açık kaynaklarda yt-dlp'nin desteklediği Chrome TLS taklidi kullanılır; bunun için kilitli bağımlılıklarda `curl-cffi` bulunur. Brazzers için yalnız giriş istemeyen herkese açık video veya fragman sayfaları denenir; üyelik ya da DRM koruması aşılmaz.
 
 ## Çalıştırma
 
@@ -45,7 +45,7 @@ Doğrudan MP4, yt-dlp'nin desteklediği site/oynatıcılar ve yerel indiriciyle 
 
 - Bu sürüm tek kullanıcı için **localhost** üzerinde çalışır; internete açık bir hizmet olarak yayımlanmamıştır. Host kontrolü localhost ile sınırlıdır.
 - Geçici uzaktan testlerde `MP4_ALLOWED_HOSTS` ile host listesi, `MP4_ACCESS_USER` ve `MP4_ACCESS_PASSWORD` ile HTTP Basic giriş zorunluluğu ayarlanabilir. Ayrı bir sunucu proxy'si `MP4_INTERNAL_TOKEN` değerini `X-MP4-Internal-Token` başlığında göndererek aynı API'ye erişebilir; bu token tarayıcıya verilmemelidir. `/api/health` sağlık kontrolü için açık kalır.
-- DRM, giriş isteyen kaynaklar ve canlı yayınlar desteklenmez. JavaScript çalıştırarak ağ trafiği yakalama henüz eklenmemiştir. Bölgesel/ağ erişim hatalarında yapılandırılmış WireGuard VPN üzerinden bir alternatif deneme yapılabilir; giriş, CAPTCHA veya DRM kaldırılmaz.
+- DRM, giriş isteyen kaynaklar ve canlı yayınlar desteklenmez. JavaScript çalıştırarak ağ trafiği yakalama henüz eklenmemiştir. Bölgesel/ağ erişim hatalarında yapılandırılmış Tor veya WireGuard üzerinden bir alternatif deneme yapılabilir; giriş, CAPTCHA veya DRM kaldırılmaz.
 - Dosya başına varsayılan 2 GB kaynak sınırı, 2 saat video süresi, eşzamanlı iki indirme ve kuyruk beklemesi hariç en fazla 15 dakika hazırlama süresi vardır. Çalışanlar dahil en fazla 10 iş sıraya alınır; toplam 20 kayıt saklanır. Analiz için ayrı bir işlem yuvası bulunur. Kaynak sınırı `MP4_MAX_BYTES`, geçici işlem diski sınırı `MP4_MAX_DISK_BYTES` ile bayt cinsinden değiştirilebilir. Birleştirme/dönüşüm sonucunun boyutu kaynak boyutundan farklı olabilir.
 - Bitmiş, duraklatılmış, iptal edilmiş ve başarısız işler **son durum değişiminden bir saat sonra** temizlenir. Çalışan işin dosyası süre doldu diye silinmez. Temizleme her 60 saniyede ve API erişimlerinde yapılır.
 - İş kayıtları `.data/<id>.json` dosyalarında atomik olarak saklanır. Kaynak URL'si devam edebilmek için kayda yazılır; bu dosyalar yalnız işletim sistemindeki kullanıcı tarafından okunabilir (0600), `.data/` izinleri 0700'dür. API listesi kaynak URL'sini döndürmez. Analiz sonuçları bellektedir; sunucu yeniden başlatılınca yeni indirmeler için tekrar analiz gerekir.
@@ -97,15 +97,32 @@ Başarılı istek kayıtları ilk 40 istekle sınırlıdır; hatalar ve bir hata
 
 Kontrollü test, oturum çerezi ve doğru Referer olmadan 403 veren yerel bir sayfadan gerçek MP4 indirir. Çerez ve başlık aktarımı mevcut yt-dlp oturumunda korunur; analiz ve indirme ayrı süreçler olduğundan indirme kaynak sayfasını tekrar çözümler. Tarayıcının kişisel oturumu içe aktarılmaz.
 
-Uyumluluk incelemesinde (20 Eylül 2026) kurulu `2026.08.19` sürümü, PyPI ve GitHub'daki son kararlı sürümle aynıydı; kanıtlanmış bir güncelleme farkı olmadığı için sürüm değiştirilmedi. Otomatik strateji en fazla bir doğrudan ve bir VPN denemesiyle sınırlıdır; aynı işlemde rastgele sağlayıcı/sürüm değişimi veya sınırsız yeniden deneme yoktur.
+Uyumluluk incelemesinde (20 Eylül 2026) kurulu `2026.08.19` sürümü, PyPI ve GitHub'daki son kararlı sürümle aynıydı; kanıtlanmış bir güncelleme farkı olmadığı için sürüm değiştirilmedi. Otomatik strateji en fazla bir doğrudan ve bir alternatif ağ denemesiyle sınırlıdır; aynı işlemde rastgele sağlayıcı/sürüm değişimi veya sınırsız yeniden deneme yoktur.
 
 HTTP erişim logu yalnız isteğin kabulünü gösterir: indirmeye verilen `202`, dosyanın tamamlandığı anlamına gelmez. Ayrıntılı loglama eklenmeden önceki hatalarda kesin boyut ve aşama geriye dönük belirlenemez.
 
 Canlı siteler zamanla değiştiği için bu testler belirli bir sitenin her zaman çalışacağı anlamına gelmez. Gerçek kaynak denemeleri ayrıca yapılmalıdır.
 
-## İsteğe bağlı otomatik WireGuard VPN
+## İsteğe bağlı otomatik alternatif ağ
 
-İndirmeyi **sunucu** yapar. Kullanıcının ülkesinde bir site engelli olsa bile sunucu erişebiliyorsa VPN gerekmez. Sunucu bağlantısı başarısız olduğunda yapılandırılmış WireGuard çıkışı üzerinden yeniden deneme yardımcı olabilir; bütün engellerin aşılması garanti edilmez.
+İndirmeyi **sunucu** yapar. Kullanıcının ülkesinde bir site engelli olsa bile sunucu erişebiliyorsa alternatif ağ gerekmez. Sunucu bağlantısı başarısız olduğunda yapılandırılmış Tor veya WireGuard çıkışı üzerinden yeniden deneme yardımcı olabilir; bütün engellerin aşılması garanti edilmez.
+
+### Tor modu (ücretsiz başlangıç)
+
+Production imajında Tor ve Privoxy bulunur; root, TUN aygıtı, hesap veya anahtar gerekmez. `MP4_VPN_MODE=tor` ile yalnız uygun doğrudan bağlantı hatalarından sonra Tor açılır. `MP4_TOR_EXIT_COUNTRIES=nl,fr,ro` iki harfli çıkış ülkelerini sınırlar; `StrictNodes` kullanıldığı için bu ülkelerde uygun çıkış bulunamazsa bağlantı başarısız olur. Tor bir anonimlik garantisi değildir, büyük dosyalarda yavaş olabilir ve bazı kaynaklar bilinen Tor çıkışlarını engeller.
+
+Railway için başlangıç ayarları:
+
+```text
+MP4_VPN_AUTO=1
+MP4_VPN_MODE=tor
+MP4_VPN_PROVIDER=tor
+MP4_TOR_EXIT_COUNTRIES=nl,fr,ro
+```
+
+Tor yalnız `127.0.0.1` üzerinde çalışan SOCKS bağlantısını yine yalnız yereldeki Privoxy HTTP CONNECT katmanına açar. Uygulamanın geri kalanı ve sunucunun genel rotası değiştirilmez. Son alternatif ağ işi bitince iki süreç de kapatılır; bir sonraki ihtiyaçta yeni Tor devresi kurulur.
+
+### WireGuard modu
 
 Production imajı açık kaynak [WireProxy](https://github.com/windtf/wireproxy) kullanır. WireGuard tamamen kullanıcı alanında çalıştığı için Railway'de ikinci bir Docker daemon'u, root yetkisi, `NET_ADMIN` veya `/dev/net/tun` gerekmez. Yalnız ilgili worker'ın trafiği `127.0.0.1` üzerindeki kimlik doğrulamalı HTTP CONNECT proxy'sinden geçer. Yerel geliştirmede eski Gluetun/Docker yolu `MP4_VPN_MODE=docker` ile kullanılmaya devam edebilir.
 
@@ -144,17 +161,17 @@ MP4_VPN_AUTO=0 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 
 
 ### İşlem davranışı
 
-- Önce doğrudan bağlantı denenir. Bölge engeli, genel HTTP 403, ağ/TLS bağlantısı veya sayfa ayrıştırma sorunu uygun olduğunda **bir kez** VPN üzerinden denenir. Bu davranış ilk URL analizi için de geçerlidir; TLS doğrulaması kapatılmaz. Her 403 veya ayrıştırma sorunu ülke engeli anlamına gelmez. CAPTCHA/bot doğrulaması, giriş, 429, DRM, bulunamayan dosya ve boyut sınırı VPN'i tetiklemez. Dönüştürme aşamasının zaman aşımı da VPN'i başlatmaz.
-- Doğrudan analiz, VPN yapılandırılmışsa 35 saniye ile sınırlanır; kalan analiz bütçesi VPN açılışı ve ikinci denemeye ayrılır. Toplam analiz bütçesi 90 saniye, indirme bütçesi 15 dakikadır. Temizlik için ayrıca sınırlı süre gerekebilir.
-- VPN'de bulunan kaynağın indirmesi ve devam ettirilmesi yine VPN'den yapılır. VPN denemesi başarısızsa sessizce doğrudan bağlantıya dönülmez. API/arayüzde `route: vpn` görünür; adres, parola ve anahtar görünmez. Eski `route: proton` kayıtları geçiş uyumluluğu için kabul edilir.
-- İlk ihtiyaçta WireProxy süreci açılır ve tünel üzerinden gerçek bir HTTP CONNECT isteğiyle sağlığı doğrulanır. Eşzamanlı işler tek bağlantıyı paylaşır. Son iş başarıyla bittiğinde, hata aldığında, duraklatıldığında veya iptal edildiğinde süreç kapatılır ve geçici sırlar silinir. Bir işin bitmesi diğerinin tünelini kapatmaz.
+- Önce doğrudan bağlantı denenir. Bölge engeli, genel HTTP 403, ağ/TLS bağlantısı veya sayfa ayrıştırma sorunu uygun olduğunda **bir kez** alternatif ağ üzerinden denenir. Bu davranış ilk URL analizi için de geçerlidir; TLS doğrulaması kapatılmaz. Her 403 veya ayrıştırma sorunu ülke engeli anlamına gelmez. CAPTCHA/bot doğrulaması, giriş, 429, DRM, bulunamayan dosya ve boyut sınırı alternatif ağı tetiklemez. Dönüştürme aşamasının zaman aşımı da alternatif ağı başlatmaz.
+- Doğrudan analiz, alternatif ağ yapılandırılmışsa WireGuard modunda 35, daha uzun başlangıç payı isteyen Tor modunda 25 saniye ile sınırlanır. Kalan bütçe bağlantının açılışı ve ikinci denemeye ayrılır. Toplam analiz bütçesi 90 saniye, indirme bütçesi 15 dakikadır. Temizlik için ayrıca sınırlı süre gerekebilir.
+- Alternatif ağda bulunan kaynağın indirmesi ve devam ettirilmesi aynı rota üzerinden yapılır. Bu deneme başarısızsa sessizce doğrudan bağlantıya dönülmez. API/arayüzde geriye dönük uyumluluk için `route: vpn` görünür; adres, parola ve anahtar görünmez. Eski `route: proton` kayıtları geçiş uyumluluğu için kabul edilir.
+- İlk ihtiyaçta seçili Tor/Privoxy veya WireProxy süreci açılır ve rota üzerinden gerçek bir HTTP CONNECT isteğiyle sağlığı doğrulanır. Eşzamanlı işler tek bağlantıyı paylaşır. Son iş başarıyla bittiğinde, hata aldığında, duraklatıldığında veya iptal edildiğinde süreç kapatılır ve geçici sırlar silinir. Bir işin bitmesi diğerinin bağlantısını kapatmaz.
 - Proxy yalnız `127.0.0.1:18989` üzerinde yayımlanır ve her başlangıçta yeni parola alır. Parola ile WireGuard anahtarı yalnız 0600 izinli geçici dosyalarda tutulur; worker'a stdin üzerinden iletilir ve işlem argümanlarına yazılmaz. Yerel Docker modunda Gluetun güvenlik duvarı da açık kalır.
-- VPN modunda DNS sorguları da tünelin içinden [Cloudflare DoH](https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-https/make-api-requests/dns-json/) ile yapılır. TLS doğrulanır, genel IP'ler kontrol edilir ve HTTP CONNECT hedefi doğrulanan sayısal IP'ye sabitlenir. Özel ağ/metadata IP'leri, yönlendirmeler ve karışık DNS yanıtları VPN'de de engellenir. Yerel DNS'e veya doğrudan ağa sessiz geri dönüş yapılmaz.
+- Alternatif ağ modunda DNS sorguları da bağlantının içinden [Cloudflare DoH](https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-https/make-api-requests/dns-json/) ile yapılır. TLS doğrulanır, genel IP'ler kontrol edilir ve HTTP CONNECT hedefi doğrulanan sayısal IP'ye sabitlenir. Özel ağ/metadata IP'leri, yönlendirmeler ve karışık DNS yanıtları bu rotada da engellenir. Yerel DNS'e veya doğrudan ağa sessiz geri dönüş yapılmaz.
 - Kaynak bir engel sayfasını HTTP 200 ile döndürürse bunu güvenilir şekilde ülke engeli olarak tanımak mümkün olmayabilir. Bu yanıt `source_parse` hatasına yol açarsa alternatif bağlantı denenir; genel `source_failed` veya `unsupported` hataları otomatik VPN'i tetiklemez.
-- Normal sunucu kapanışında aktif işler ve WireProxy bağlantısı kapatılır. Yerel Docker modu zorla öldürülür ve konteyner kalırsa bir sonraki başlangıç yalnız aynı projeye ait etiketli eski konteyneri temizler. Temizlik başarısız olursa `vpn_cleanup_failed` loglanır.
+- Normal sunucu kapanışında aktif işler ile Tor/Privoxy veya WireProxy bağlantısı kapatılır. Yerel Docker modu zorla öldürülür ve konteyner kalırsa bir sonraki başlangıç yalnız aynı projeye ait etiketli eski konteyneri temizler. Temizlik başarısız olursa `vpn_cleanup_failed` loglanır.
 
 `GET /api/network`, yapılandırmanın varlığını, bağlantı durumunu ve kullanan iş sayısını gösterir. `configured: true` dosyanın var olduğu anlamına gelir; canlı bağlantı ancak ilk kullanımda sağlık kontrolünden sonra doğrulanır. Anahtar/token döndürmez. Loglarda `vpn_starting`, `vpn_connected`, `vpn_fallback`, `vpn_stopped` ve başarısız temizlik olayları bulunur.
 
 Uygulama tek sunucu süreci içindir. Free-Web-Tools'a çok kullanıcılı dağıtım yapılırken kuyruk, VPN bağlantı sayacı, kullanıcı kotaları ve yetkilendirme merkezi servis olarak ele alınmalıdır. Şimdiki değişiklik o repoya otomatik dağıtım yapmaz.
 
-Production entegrasyonu [WireProxy](https://github.com/windtf/wireproxy), yerel Docker alternatifi ise [Gluetun özel WireGuard sağlayıcısı](https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/custom.md) ve [HTTP proxy](https://github.com/qdm12/gluetun-wiki/blob/main/setup/options/http-proxy.md) belgelerine dayanır. Gerçek sağlayıcı anahtarı olmadan testler yerel proxy/TLS düzenekleriyle çalışır; gerçek VPN çıkışı ayrıca doğrulanmalıdır.
+Production entegrasyonu Tor/Privoxy ile [WireProxy](https://github.com/windtf/wireproxy), yerel Docker alternatifi ise [Gluetun özel WireGuard sağlayıcısı](https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/custom.md) ve [HTTP proxy](https://github.com/qdm12/gluetun-wiki/blob/main/setup/options/http-proxy.md) belgelerine dayanır. Testler yerel proxy/TLS düzenekleriyle çalışır; gerçek çıkış ağı ayrıca doğrulanmalıdır.

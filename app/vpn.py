@@ -1,4 +1,4 @@
-"""On-demand provider-neutral WireGuard gateway; the host route is untouched."""
+"""On-demand Tor or WireGuard gateway; the host route is untouched."""
 import asyncio
 import base64
 import configparser
@@ -16,6 +16,7 @@ from app.errors import MediaError
 
 IMAGE = 'qmcgaw/gluetun:v3.41.3'
 PROXY_PORT = 18989
+TOR_SOCKS_PORT = 19050
 FALLBACK_CODES = {'geo_blocked', 'access_denied', 'network', 'timeout', 'tls_failed', 'source_parse'}
 
 
@@ -58,6 +59,8 @@ class VpnGateway:
         self.state = 'idle'
         self.proxy = None
         self.process = None
+        self.tor_process = None
+        self.privoxy_process = None
         self.env_config_written = False
 
     @property
@@ -69,13 +72,38 @@ class VpnGateway:
         return os.environ.get('MP4_WIREPROXY_BINARY', '/usr/local/bin/wireproxy')
 
     @property
+    def tor_binary(self):
+        return os.environ.get('MP4_TOR_BINARY', '/usr/bin/tor')
+
+    @property
+    def privoxy_binary(self):
+        return os.environ.get('MP4_PRIVOXY_BINARY', '/usr/sbin/privoxy')
+
+    @property
+    def tor_exit_countries(self):
+        raw = os.environ.get('MP4_TOR_EXIT_COUNTRIES', 'nl,fr,ro')
+        countries = [value.strip().lower() for value in raw.split(',') if value.strip()]
+        if not countries or len(countries) > 8 or any(not re.fullmatch(r'[a-z]{2}', value) for value in countries):
+            raise MediaError('vpn_config', 'Tor çıkış ülkeleri geçersiz. İki harfli ülke kodları kullan.')
+        return countries
+
+    @property
     def configured(self):
+        if os.environ.get('MP4_VPN_AUTO', '1') != '1':
+            return False
+        if self.mode == 'tor':
+            return True
         supplied = bool(os.environ.get('MP4_VPN_CONFIG_B64', '').strip())
-        return os.environ.get('MP4_VPN_AUTO', '1') == '1' and (self.config.is_file() or supplied)
+        return self.config.is_file() or supplied
 
     def public(self):
-        country = os.environ.get('MP4_VPN_COUNTRY', '').strip().upper()[:8] or None
-        provider = re.sub(r'[^a-z0-9._-]', '', os.environ.get('MP4_VPN_PROVIDER', 'wireguard').strip().lower())[:32]
+        if self.mode == 'tor':
+            country = '/'.join(value.upper() for value in self.tor_exit_countries)
+            default_provider = 'tor'
+        else:
+            country = os.environ.get('MP4_VPN_COUNTRY', '').strip().upper()[:8] or None
+            default_provider = 'wireguard'
+        provider = re.sub(r'[^a-z0-9._-]', '', os.environ.get('MP4_VPN_PROVIDER', default_provider).strip().lower())[:32]
         return {'provider': provider or 'wireguard', 'transport': self.mode, 'country': country,
                 'configured': self.configured,
                 'state': self.state if self.configured else 'unconfigured', 'active_jobs': self.users}
@@ -115,7 +143,7 @@ class VpnGateway:
             os.fchmod(stream.fileno(), 0o600)
             stream.write(content)
 
-    async def wireproxy_ready(self, username, password):
+    async def proxy_ready(self, username, password):
         reader, writer = await asyncio.open_connection('127.0.0.1', PROXY_PORT)
         try:
             token = base64.b64encode(f'{username}:{password}'.encode()).decode()
@@ -146,7 +174,7 @@ class VpnGateway:
                     if self.process.returncode is not None:
                         raise MediaError('vpn_unavailable', 'WireGuard VPN bağlantısı başlatılamadı.', True)
                     try:
-                        await asyncio.wait_for(self.wireproxy_ready(username, password), timeout=8)
+                        await asyncio.wait_for(self.proxy_ready(username, password), timeout=8)
                         break
                     except (OSError, asyncio.IncompleteReadError, TimeoutError):
                         await asyncio.sleep(1)
@@ -154,6 +182,46 @@ class VpnGateway:
             raise MediaError('vpn_unavailable', 'WireGuard VPN bağlantısı zaman aşımına uğradı.', True) from None
         except OSError:
             raise MediaError('vpn_unavailable', 'WireProxy çalıştırılamadı.', True) from None
+
+    async def start_tor_proxy(self, username, password):
+        for binary, label in ((self.tor_binary, 'Tor'), (self.privoxy_binary, 'Privoxy')):
+            if not Path(binary).is_file() and shutil.which(binary) is None:
+                raise MediaError('vpn_unavailable', f'{label} çalıştırıcısı sunucuda bulunamadı.', True)
+        data_directory = self.root / 'tor-data'
+        data_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        data_directory.chmod(0o700)
+        exits = ','.join(f'{{{country}}}' for country in self.tor_exit_countries)
+        tor_config = self.root / 'torrc'
+        privoxy_config = self.root / 'privoxy.conf'
+        self.write_private(tor_config,
+            f'ClientOnly 1\nSocksPort 127.0.0.1:{TOR_SOCKS_PORT}\n'
+            f'DataDirectory {data_directory.resolve()}\nAvoidDiskWrites 1\n'
+            f'ExitNodes {exits}\nStrictNodes 1\n')
+        self.write_private(privoxy_config,
+            f'listen-address 127.0.0.1:{PROXY_PORT}\n'
+            f'forward-socks5t / 127.0.0.1:{TOR_SOCKS_PORT} .\n'
+            'toggle 1\nenable-remote-toggle 0\nenable-remote-http-toggle 0\n'
+            'enable-edit-actions 0\nlogfile /dev/null\ndebug 0\n')
+        try:
+            self.tor_process = await asyncio.create_subprocess_exec(
+                self.tor_binary, '-f', str(tor_config),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            self.privoxy_process = await asyncio.create_subprocess_exec(
+                self.privoxy_binary, '--no-daemon', str(privoxy_config),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            async with asyncio.timeout(50):
+                while True:
+                    if self.tor_process.returncode is not None or self.privoxy_process.returncode is not None:
+                        raise MediaError('vpn_unavailable', 'Tor alternatif bağlantısı başlatılamadı.', True)
+                    try:
+                        await asyncio.wait_for(self.proxy_ready(username, password), timeout=8)
+                        break
+                    except (OSError, asyncio.IncompleteReadError, TimeoutError):
+                        await asyncio.sleep(1)
+        except TimeoutError:
+            raise MediaError('vpn_unavailable', 'Tor ağına bağlantı zaman aşımına uğradı.', True) from None
+        except OSError:
+            raise MediaError('vpn_unavailable', 'Tor alternatif bağlantısı çalıştırılamadı.', True) from None
 
     async def docker(self, *args, timeout=20):
         process = None
@@ -181,17 +249,20 @@ class VpnGateway:
             await self.docker('rm', '-f', container)
 
     async def start(self):
-        if self.mode not in {'docker', 'wireproxy'}:
+        if self.mode not in {'docker', 'wireproxy', 'tor'}:
             raise MediaError('vpn_config', 'MP4_VPN_MODE değeri geçersiz.')
-        self.materialize_env_config()
-        validate_config(self.config)
+        if self.mode != 'tor':
+            self.materialize_env_config()
+            validate_config(self.config)
         self.state = 'starting'
         diagnostics.record('vpn_starting')
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.root.chmod(0o700)
         username = 'mp4'
         password = secrets.token_hex(24)
-        if self.mode == 'wireproxy':
+        if self.mode == 'tor':
+            await self.start_tor_proxy(username, password)
+        elif self.mode == 'wireproxy':
             await self.start_wireproxy(username, password)
         else:
             await self.remove_container()
@@ -221,15 +292,23 @@ class VpnGateway:
 
     async def stop(self):
         try:
-            if self.process is not None:
-                if self.process.returncode is None:
-                    self.process.terminate()
+            processes = [process for process in (self.process, self.privoxy_process, self.tor_process)
+                         if process is not None]
+            if processes:
+                for process in processes:
+                    if process.returncode is None:
+                        process.terminate()
+                for process in processes:
+                    if process.returncode is not None:
+                        continue
                     try:
-                        await asyncio.wait_for(self.process.wait(), timeout=10)
+                        await asyncio.wait_for(process.wait(), timeout=10)
                     except TimeoutError:
-                        self.process.kill()
-                        await self.process.wait()
+                        process.kill()
+                        await process.wait()
                 self.process = None
+                self.privoxy_process = None
+                self.tor_process = None
             elif self.mode == 'docker':
                 await self.remove_container()
         except MediaError as exc:
@@ -244,7 +323,7 @@ class VpnGateway:
         finally:
             self.proxy = None
             try:
-                for name in ('proxy.env', 'wireproxy.conf'):
+                for name in ('proxy.env', 'wireproxy.conf', 'torrc', 'privoxy.conf'):
                     (self.root / name).unlink(missing_ok=True)
                 if self.env_config_written:
                     self.config.unlink(missing_ok=True)

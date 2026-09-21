@@ -207,18 +207,21 @@ async def worker(payload, on_event=None, timeout=90):
             if not gateway.configured and error.diagnostic['route'] == 'direct':
                 error.message += ' Otomatik VPN yapılandırılmadığı için alternatif bağlantı denenemedi.'
         if error.diagnostic['route'] in {'vpn', 'proton'} and error.code not in {'vpn_config', 'vpn_unavailable'}:
-            error.message += ' Bu hata VPN üzerinden yapılan denemede oluştu.'
+            error.message += ' Bu hata alternatif ağ üzerinden yapılan denemede oluştu.'
         diagnostics.record('routing_failed', **error.diagnostic, code=error.code)
         raise error from None
 
 
 async def _routed_worker(payload, on_event=None, timeout=90):
-    # A single deadline covers the direct attempt, gateway startup and VPN retry.
+    # A single deadline covers the direct attempt, gateway startup and routed retry.
     # Credentials are internal-only and reach the child via stdin, never argv.
     async with asyncio.timeout(timeout):
         if payload.get('route') not in {'vpn', 'proton'}:
             try:
-                direct_budget = min(timeout, 35) if payload['mode'] == 'analyze' and gateway.configured else timeout
+                # Tor may need longer than WireGuard to bootstrap, so reserve more
+                # of the shared analysis deadline when that transport is selected.
+                reserved_budget = 25 if getattr(gateway, 'mode', '') == 'tor' else 35
+                direct_budget = min(timeout, reserved_budget) if payload['mode'] == 'analyze' and gateway.configured else timeout
                 result = await _worker_once(payload, on_event, timeout=direct_budget)
                 return {**result, 'route': 'direct'}
             except Exception as exc:
@@ -232,9 +235,10 @@ async def _routed_worker(payload, on_event=None, timeout=90):
                     raise error from None
                 diagnostics.record('vpn_fallback', job_id=payload.get('job_id'), request_id=payload.get('request_id'), code=error.code, route='vpn')
         elif not gateway.configured:
-            raise MediaError('vpn_config', 'Bu işlem VPN bağlantısı gerektiriyor. Sunucunun VPN ayarlarını kontrol et.', True)
+            raise MediaError('vpn_config', 'Bu işlem alternatif ağ bağlantısı gerektiriyor. Sunucu ayarlarını kontrol et.', True)
         if on_event:
-            on_event({'event': 'progress', 'message': 'VPN bağlantısı hazırlanıyor…', 'percent': None, 'route': 'vpn'})
+            label = 'Tor' if getattr(gateway, 'mode', '') == 'tor' else 'VPN'
+            on_event({'event': 'progress', 'message': f'{label} bağlantısı hazırlanıyor…', 'percent': None, 'route': 'vpn'})
         try:
             async with gateway.connection() as proxy:
                 result = await _worker_once({**payload, 'vpn_proxy': proxy, 'route': 'vpn'}, on_event, timeout=timeout)

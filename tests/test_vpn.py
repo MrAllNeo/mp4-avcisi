@@ -94,6 +94,75 @@ def test_invalid_railway_secret_does_not_leak_or_replace_config(tmp_path, monkey
     assert gateway.config.read_text() == config_text()
 
 
+def test_tor_mode_needs_no_wireguard_secret_and_reports_exits(tmp_path, monkeypatch):
+    monkeypatch.setenv('MP4_VPN_MODE', 'tor')
+    monkeypatch.setenv('MP4_TOR_EXIT_COUNTRIES', 'nl, FR,ro')
+    monkeypatch.delenv('MP4_VPN_CONFIG_B64', raising=False)
+    gateway = VpnGateway(tmp_path)
+    status = gateway.public()
+    assert gateway.configured is True
+    assert status == {'provider': 'tor', 'transport': 'tor', 'country': 'NL/FR/RO',
+                      'configured': True, 'state': 'idle', 'active_jobs': 0}
+
+
+@pytest.mark.parametrize('countries', ['', 'netherlands', 'nl,12', 'nl,fr,ro,de,us,ca,gb,es,it'])
+def test_tor_rejects_invalid_exit_country_list(tmp_path, monkeypatch, countries):
+    monkeypatch.setenv('MP4_VPN_MODE', 'tor')
+    monkeypatch.setenv('MP4_TOR_EXIT_COUNTRIES', countries)
+    gateway = VpnGateway(tmp_path)
+    with pytest.raises(MediaError) as caught:
+        gateway.public()
+    assert caught.value.code == 'vpn_config'
+
+
+def test_tor_starts_private_local_proxy_and_cleans_up(tmp_path, monkeypatch):
+    tor_binary = tmp_path / 'tor-bin'
+    privoxy_binary = tmp_path / 'privoxy-bin'
+    tor_binary.touch()
+    privoxy_binary.touch()
+    monkeypatch.setenv('MP4_VPN_MODE', 'tor')
+    monkeypatch.setenv('MP4_TOR_BINARY', str(tor_binary))
+    monkeypatch.setenv('MP4_PRIVOXY_BINARY', str(privoxy_binary))
+    monkeypatch.setenv('MP4_TOR_EXIT_COUNTRIES', 'nl,fr,ro')
+    gateway = VpnGateway(tmp_path / 'gateway')
+    calls = []
+
+    class Process:
+        returncode = None
+        def terminate(self):
+            self.returncode = 0
+        async def wait(self):
+            return self.returncode
+
+    async def spawn(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Process()
+
+    async def ready(username, password):
+        assert username == 'mp4' and len(password) == 48
+
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', spawn)
+    monkeypatch.setattr(gateway, 'proxy_ready', ready)
+
+    async def scenario():
+        async with gateway.connection() as proxy:
+            assert proxy['host'] == '127.0.0.1' and proxy['port'] == 18989
+            torrc = (gateway.root / 'torrc').read_text()
+            privoxy = (gateway.root / 'privoxy.conf').read_text()
+            assert 'ExitNodes {nl},{fr},{ro}' in torrc and 'StrictNodes 1' in torrc
+            assert 'SocksPort 127.0.0.1:19050' in torrc
+            assert 'listen-address 127.0.0.1:18989' in privoxy
+            assert 'forward-socks5t / 127.0.0.1:19050 .' in privoxy
+            assert (gateway.root / 'torrc').stat().st_mode & 0o777 == 0o600
+        assert gateway.state == 'idle'
+        assert not (gateway.root / 'torrc').exists()
+        assert not (gateway.root / 'privoxy.conf').exists()
+
+    asyncio.run(scenario())
+    assert calls[0][0][:2] == (str(tor_binary), '-f')
+    assert calls[1][0][:2] == (str(privoxy_binary), '--no-daemon')
+
+
 def test_ipv6_only_import_preserves_existing_config(tmp_path):
     source = tmp_path / 'proton.conf'
     target = tmp_path / 'gateway/wg0.conf'
@@ -237,7 +306,7 @@ def test_failed_vpn_attempt_is_not_retried_directly(monkeypatch):
         asyncio.run(main.worker({'mode': 'download'}))
     assert len(calls) == 2 and gateway.entered == gateway.exited == 1
     assert caught.value.diagnostic['route'] == 'vpn' and caught.value.diagnostic['attempt'] == 2
-    assert 'VPN üzerinden' in caught.value.message
+    assert 'alternatif ağ üzerinden' in caught.value.message
     assert calls[0]['request_id'] == calls[1]['request_id'] == caught.value.diagnostic['request_id']
 
 
