@@ -150,7 +150,7 @@ def test_tor_starts_private_local_proxy_and_cleans_up(tmp_path, monkeypatch):
             assert proxy['host'] == '127.0.0.1' and proxy['port'] == 18989
             torrc = (gateway.root / 'torrc').read_text()
             privoxy = (gateway.root / 'privoxy.conf').read_text()
-            assert 'ExitNodes {nl},{fr},{ro}' in torrc and 'StrictNodes 1' in torrc
+            assert 'ExitNodes {nl},{fr},{ro}' in torrc and 'StrictNodes 0' in torrc
             assert 'SocksPort 127.0.0.1:19050' in torrc
             assert 'listen-address 127.0.0.1:18989' in privoxy
             assert 'forward-socks5t / 127.0.0.1:19050 .' in privoxy
@@ -192,6 +192,35 @@ def test_persistent_tor_prewarm_is_reused_until_shutdown(tmp_path, monkeypatch):
 
     asyncio.run(scenario())
     assert actions == ['start', 'stop']
+
+
+def test_request_does_not_block_behind_tor_prewarm(tmp_path, monkeypatch):
+    monkeypatch.setenv('MP4_VPN_MODE', 'tor')
+    monkeypatch.setenv('MP4_TOR_PERSISTENT', '1')
+    gateway = VpnGateway(tmp_path)
+    gateway.tor_bootstrap_percent = 50
+
+    async def scenario():
+        gateway.prewarm_task = asyncio.create_task(asyncio.sleep(30))
+        original_wait_for = asyncio.wait_for
+
+        async def short_wait(awaitable, timeout):
+            assert timeout == 8
+            return await original_wait_for(awaitable, timeout=0.001)
+
+        monkeypatch.setattr(asyncio, 'wait_for', short_wait)
+        try:
+            with pytest.raises(MediaError) as caught:
+                async with gateway.connection():
+                    pytest.fail('must not run')
+            assert caught.value.code == 'vpn_unavailable'
+            assert caught.value.diagnostic['percent'] == 50
+            assert '%50' in caught.value.message
+        finally:
+            gateway.prewarm_task.cancel()
+            await asyncio.gather(gateway.prewarm_task, return_exceptions=True)
+
+    asyncio.run(scenario())
 
 
 def test_ipv6_only_import_preserves_existing_config(tmp_path):

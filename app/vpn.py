@@ -61,6 +61,9 @@ class VpnGateway:
         self.process = None
         self.tor_process = None
         self.privoxy_process = None
+        self.prewarm_task = None
+        self.prewarm_failed = False
+        self.tor_bootstrap_percent = 0
         self.env_config_written = False
 
     @property
@@ -94,9 +97,13 @@ class VpnGateway:
     @property
     def tor_bootstrap_timeout(self):
         try:
-            return max(30, min(int(os.environ.get('MP4_TOR_BOOTSTRAP_TIMEOUT', '120')), 180))
+            return max(30, min(int(os.environ.get('MP4_TOR_BOOTSTRAP_TIMEOUT', '300')), 600))
         except (TypeError, ValueError):
-            return 120
+            return 300
+
+    @property
+    def tor_strict_nodes(self):
+        return os.environ.get('MP4_TOR_STRICT_NODES', '0') == '1'
 
     @property
     def configured(self):
@@ -209,7 +216,7 @@ class VpnGateway:
         self.write_private(tor_config,
             f'ClientOnly 1\nSocksPort 127.0.0.1:{TOR_SOCKS_PORT}\n'
             f'DataDirectory {data_directory.resolve()}\nAvoidDiskWrites 1\n'
-            f'ExitNodes {exits}\nStrictNodes 1\n'
+            f'ExitNodes {exits}\nStrictNodes {int(self.tor_strict_nodes)}\n'
             f'Log notice file {tor_log.resolve()}\n')
         self.write_private(privoxy_config,
             f'listen-address 127.0.0.1:{PROXY_PORT}\n'
@@ -236,6 +243,7 @@ class VpnGateway:
                         percent = int(matches[-1]) if matches else last_percent
                         if percent != last_percent and percent >= 0:
                             last_percent = percent
+                            self.tor_bootstrap_percent = percent
                             diagnostics.record('tor_bootstrap', stage='startup', percent=percent)
                     except OSError:
                         pass
@@ -316,6 +324,7 @@ class VpnGateway:
                     await asyncio.sleep(1)
         self.proxy = {'host': '127.0.0.1', 'port': PROXY_PORT, 'username': username, 'password': password}
         self.state = 'connected'
+        self.prewarm_failed = False
         diagnostics.record('vpn_connected')
 
     async def stop(self):
@@ -370,23 +379,38 @@ class VpnGateway:
         """Prepare persistent Tor without delaying the web health check."""
         if not self.configured or not self.persistent:
             return
-        async with self.lock:
-            if self.proxy is not None:
-                return
-            try:
-                await self.start()
-            except asyncio.CancelledError:
-                await self.stop()
-                raise
-            except Exception as exc:
-                error = exc if isinstance(exc, MediaError) else MediaError('vpn_unavailable', 'Tor bağlantısı hazırlanamadı.', True)
-                detail = getattr(error, 'diagnostic', {})
-                diagnostics.record('vpn_prewarm_failed', code=error.code,
-                                   stage='startup', percent=detail.get('percent', 0))
-                await self.stop()
+        self.prewarm_task = asyncio.current_task()
+        try:
+            await self.start()
+        except asyncio.CancelledError:
+            await self.stop()
+            raise
+        except Exception as exc:
+            error = exc if isinstance(exc, MediaError) else MediaError('vpn_unavailable', 'Tor bağlantısı hazırlanamadı.', True)
+            detail = getattr(error, 'diagnostic', {})
+            diagnostics.record('vpn_prewarm_failed', code=error.code,
+                               stage='startup', percent=detail.get('percent', self.tor_bootstrap_percent))
+            await self.stop()
+            self.state = 'error'
+            self.prewarm_failed = True
+        finally:
+            self.prewarm_task = None
 
     @asynccontextmanager
     async def connection(self):
+        if self.persistent and self.prewarm_task is not None and not self.prewarm_task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(self.prewarm_task), timeout=8)
+            except TimeoutError:
+                error = MediaError('vpn_unavailable',
+                    f'Tor ağı hazırlanıyor (%{self.tor_bootstrap_percent}). Biraz sonra yeniden dene.', True)
+                error.diagnostic = {'stage': 'startup', 'percent': self.tor_bootstrap_percent}
+                raise error from None
+        if self.persistent and self.prewarm_failed:
+            error = MediaError('vpn_unavailable',
+                f'Tor ağı hazırlanamadı (%{self.tor_bootstrap_percent}). Sunucu ağını kontrol et.', True)
+            error.diagnostic = {'stage': 'startup', 'percent': self.tor_bootstrap_percent}
+            raise error
         async with self.lock:
             if self.users == 0 and self.proxy is None:
                 try:
