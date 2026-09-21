@@ -107,9 +107,17 @@ Canlı siteler zamanla değiştiği için bu testler belirli bir sitenin her zam
 
 İndirmeyi **sunucu** yapar. Kullanıcının ülkesinde bir site engelli olsa bile sunucu erişebiliyorsa VPN gerekmez. Sunucu bağlantısı başarısız olduğunda Proton üzerinden yeniden deneme yardımcı olabilir; bütün engellerin aşılması garanti edilmez.
 
-Bu entegrasyon Linux üzerinde yerel Docker Engine ve `/dev/net/tun` kullanır. Proton'un masaüstü uygulamasını veya bilgisayarın genel ağ bağlantısını değiştirmez. WireGuard, Gluetun konteyneri içinde çalışır; yalnız ilgili worker'ın trafiği bu tünelden geçer. Docker Compose gerekmez. API'nin çalıştığı kullanıcı `/var/run/docker.sock` üzerinden Docker'a erişebilmelidir. Docker soketi web istemcilerine açılmaz ve konteynere bağlanmaz.
+Production imajı açık kaynak [WireProxy](https://github.com/windtf/wireproxy) kullanır. WireGuard tamamen kullanıcı alanında çalıştığı için Railway'de ikinci bir Docker daemon'u, root yetkisi, `NET_ADMIN` veya `/dev/net/tun` gerekmez. Yalnız ilgili worker'ın trafiği `127.0.0.1` üzerindeki kimlik doğrulamalı HTTP CONNECT proxy'sinden geçer. Yerel geliştirmede eski Gluetun/Docker yolu `MP4_VPN_MODE=docker` ile kullanılmaya devam edebilir.
 
-### Bir defalık hazırlık
+Açık kaynak istemci tek başına ülke çıkış IP'si sağlamaz. Proton veya başka bir WireGuard sunucusundan alınmış geçerli yapılandırma gerekir. Railway için yapılandırma dosyasının base64 karşılığı `MP4_VPN_CONFIG_B64` adlı gizli ortam değişkenine, iki harfli ülke etiketi de isteğe bağlı `MP4_VPN_COUNTRY` değişkenine yazılır. Gizli değeri GitHub'a, frontend'e veya sohbete ekleme. Uygulama bunu yalnız ihtiyaç anında 0600 izinli geçici dosyaya açar ve son VPN işi bittiğinde siler.
+
+```bash
+base64 -w0 proton.conf
+```
+
+Production imajının varsayılanları `MP4_VPN_AUTO=1` ve `MP4_VPN_MODE=wireproxy` değerleridir. Yapılandırma değişkeni yoksa uygulama doğrudan bağlantıyla normal çalışır ve VPN'i başlatmaz.
+
+### Yerel Docker için bir defalık hazırlık
 
 1. [Proton hesabından Linux için WireGuard yapılandırması indir](https://protonvpn.com/support/wireguard-configurations). Hesabının erişebildiği, kaynağın açık olduğu bir sunucuyu seç. `.conf` dosyası gizli anahtar içerir; GitHub'a veya sohbete ekleme.
 2. Gluetun imajını hazırla:
@@ -124,11 +132,11 @@ Bu entegrasyon Linux üzerinde yerel Docker Engine ve `/dev/net/tun` kullanır. 
    .venv/bin/python -m app.configure_vpn /tam/yol/proton.conf
    ```
 
-Dosya doğrulanarak `.data/proton/wg0.conf` konumuna 0600 izinleriyle kaydedilir. Mevcut geçerli ayar, hatalı dosya içe aktarılırsa korunur. Dosya bulunmadığında uygulama normal bağlantıyla çalışır ve VPN başlatmaz. Dosya eklendikten sonra sonraki işlem otomatik kullanabilir; sunucuyu yeniden başlatmak gerekmez. Tamamen devre dışı bırakmak için sunucuyu `MP4_VPN_AUTO=0` ortam değişkeniyle başlat.
+Dosya doğrulanarak `.data/proton/wg0.conf` konumuna 0600 izinleriyle kaydedilir. Mevcut geçerli ayar, hatalı dosya içe aktarılırsa korunur. Dosya bulunmadığında uygulama normal bağlantıyla çalışır ve VPN başlatmaz. Dosya eklendikten sonra sonraki işlem otomatik kullanabilir; sunucuyu yeniden başlatmak gerekmez. Tamamen devre dışı bırakmak için sunucuyu `MP4_VPN_AUTO=0` ortam değişkeniyle başlat. Bu Gluetun adımları yalnız `MP4_VPN_MODE=docker` kullanılan yerel sunucular içindir; Railway production bunlara ihtiyaç duymaz.
 
 Proton masaüstü uygulamasını kurmak veya elle açmak bu yapılandırmanın yerini almaz. Arayüzde “Otomatik VPN ayarlanmamış” görünüyorsa uygulama kendi tünelini açamaz. Uygun erişim hatalarında logdaki `vpn_unconfigured` kaydı ve kullanıcıya gösterilen mesaj bu eksikliği belirtir.
 
-Bu sürümün VPN ağ geçidi Docker'ın IPv4 köprüsünü kullanır. Proton'un çift adresli dosyası içe aktarılırken yalnız uygulamaya ait kopyadaki `Interface.Address` IPv4 ile sınırlandırılır; indirdiğin özgün dosya değiştirilmez. Böylece IPv6 desteği kapalı Docker ortamlarında Gluetun'un başlangıçta kapanması önlenir. Yalnız IPv6 adresi içeren yapılandırmalar kabul edilmez.
+Proton'un çift adresli dosyası içe aktarılırken yalnız uygulamaya ait kopyadaki `Interface.Address` IPv4 ile sınırlandırılır; indirdiğin özgün dosya değiştirilmez. Böylece IPv6 desteği kapalı ortamlarda başlangıç sorunu önlenir. Yalnız IPv6 adresi içeren yapılandırmalar kabul edilmez.
 
 ```bash
 MP4_VPN_AUTO=0 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
@@ -139,14 +147,14 @@ MP4_VPN_AUTO=0 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 
 - Önce doğrudan bağlantı denenir. Bölge engeli, genel HTTP 403, ağ/TLS bağlantısı veya sayfa ayrıştırma sorunu uygun olduğunda **bir kez** Proton üzerinden denenir. Bu davranış ilk URL analizi için de geçerlidir; TLS doğrulaması kapatılmaz. Her 403 veya ayrıştırma sorunu ülke engeli anlamına gelmez. CAPTCHA/bot doğrulaması, giriş, 429, DRM, bulunamayan dosya ve boyut sınırı VPN'i tetiklemez. Dönüştürme aşamasının zaman aşımı da VPN'i başlatmaz.
 - Doğrudan analiz, VPN yapılandırılmışsa 35 saniye ile sınırlanır; kalan analiz bütçesi VPN açılışı ve ikinci denemeye ayrılır. Toplam analiz bütçesi 90 saniye, indirme bütçesi 15 dakikadır. Temizlik için ayrıca sınırlı süre gerekebilir.
 - VPN'de bulunan kaynağın indirmesi ve devam ettirilmesi yine VPN'den yapılır. VPN denemesi başarısızsa sessizce doğrudan bağlantıya dönülmez. API/arayüzde `route: proton` görünür; adres, parola ve anahtar görünmez.
-- İlk ihtiyaçta projeye özel konteyner açılır ve sağlıklı olması beklenir. Eşzamanlı işler tek bağlantıyı paylaşır. Son iş başarıyla bittiğinde, hata aldığında, duraklatıldığında veya iptal edildiğinde konteyner kaldırılır. Bir işin bitmesi diğerinin tünelini kapatmaz.
-- Gluetun güvenlik duvarı açık kalır. Proxy yalnız `127.0.0.1:18989` üzerinde yayımlanır ve her başlangıçta yeni parola alır. Parola özel bir geçici dosyadan konteynere, stdin üzerinden worker'a iletilir; işlem argümanlarına yazılmaz.
+- İlk ihtiyaçta WireProxy süreci açılır ve tünel üzerinden gerçek bir HTTP CONNECT isteğiyle sağlığı doğrulanır. Eşzamanlı işler tek bağlantıyı paylaşır. Son iş başarıyla bittiğinde, hata aldığında, duraklatıldığında veya iptal edildiğinde süreç kapatılır ve geçici sırlar silinir. Bir işin bitmesi diğerinin tünelini kapatmaz.
+- Proxy yalnız `127.0.0.1:18989` üzerinde yayımlanır ve her başlangıçta yeni parola alır. Parola ile WireGuard anahtarı yalnız 0600 izinli geçici dosyalarda tutulur; worker'a stdin üzerinden iletilir ve işlem argümanlarına yazılmaz. Yerel Docker modunda Gluetun güvenlik duvarı da açık kalır.
 - VPN modunda DNS sorguları da tünelin içinden [Cloudflare DoH](https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-https/make-api-requests/dns-json/) ile yapılır. TLS doğrulanır, genel IP'ler kontrol edilir ve HTTP CONNECT hedefi doğrulanan sayısal IP'ye sabitlenir. Özel ağ/metadata IP'leri, yönlendirmeler ve karışık DNS yanıtları VPN'de de engellenir. Yerel DNS'e veya doğrudan ağa sessiz geri dönüş yapılmaz.
 - Kaynak bir engel sayfasını HTTP 200 ile döndürürse bunu güvenilir şekilde ülke engeli olarak tanımak mümkün olmayabilir. Bu yanıt `source_parse` hatasına yol açarsa alternatif bağlantı denenir; genel `source_failed` veya `unsupported` hataları otomatik VPN'i tetiklemez.
-- Süreç zorla öldürülürse konteyner kalabilir; bir sonraki VPN başlangıcı yalnız aynı projeye ait etiketli eski konteyneri temizler. Normal sunucu kapanışında aktif işler ve bağlantı kapatılır. Konteynerin durdurulması başarısız olursa `vpn_cleanup_failed` loglanır; işletici Docker durumunu kontrol etmelidir.
+- Normal sunucu kapanışında aktif işler ve WireProxy bağlantısı kapatılır. Yerel Docker modu zorla öldürülür ve konteyner kalırsa bir sonraki başlangıç yalnız aynı projeye ait etiketli eski konteyneri temizler. Temizlik başarısız olursa `vpn_cleanup_failed` loglanır.
 
 `GET /api/network`, yapılandırmanın varlığını, bağlantı durumunu ve kullanan iş sayısını gösterir. `configured: true` dosyanın var olduğu anlamına gelir; canlı bağlantı ancak ilk kullanımda sağlık kontrolünden sonra doğrulanır. Anahtar/token döndürmez. Loglarda `vpn_starting`, `vpn_connected`, `vpn_fallback`, `vpn_stopped` ve başarısız temizlik olayları bulunur.
 
 Uygulama tek sunucu süreci içindir. Free-Web-Tools'a çok kullanıcılı dağıtım yapılırken kuyruk, VPN bağlantı sayacı, kullanıcı kotaları ve yetkilendirme merkezi servis olarak ele alınmalıdır. Şimdiki değişiklik o repoya otomatik dağıtım yapmaz.
 
-Entegrasyon [Gluetun özel WireGuard sağlayıcısı](https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/custom.md), [yapılandırma dosyası](https://github.com/qdm12/gluetun-wiki/blob/main/setup/options/wireguard.md) ve [HTTP proxy](https://github.com/qdm12/gluetun-wiki/blob/main/setup/options/http-proxy.md) belgelerine dayanır. Proton anahtarı olmadan testler yerel proxy/TLS düzenekleriyle çalışır; gerçek Proton çıkışı ayrıca doğrulanmalıdır.
+Production entegrasyonu [WireProxy](https://github.com/windtf/wireproxy), yerel Docker alternatifi ise [Gluetun özel WireGuard sağlayıcısı](https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/custom.md) ve [HTTP proxy](https://github.com/qdm12/gluetun-wiki/blob/main/setup/options/http-proxy.md) belgelerine dayanır. Proton anahtarı olmadan testler yerel proxy/TLS düzenekleriyle çalışır; gerçek Proton çıkışı ayrıca doğrulanmalıdır.

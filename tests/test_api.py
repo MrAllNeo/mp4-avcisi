@@ -117,8 +117,8 @@ def test_vpn_analysis_route_is_carried_into_download(client, monkeypatch):
 def test_network_status_contains_only_public_state(client):
     response = client.get('/api/network')
     assert response.status_code == 200
-    assert response.json() == {'provider': 'proton', 'configured': False,
-                               'state': 'unconfigured', 'active_jobs': 0}
+    assert response.json() == {'provider': 'proton', 'transport': 'docker', 'country': None,
+                               'configured': False, 'state': 'unconfigured', 'active_jobs': 0}
 
 
 def test_unknown_analysis_error_explains_stage_and_missing_vpn(client, monkeypatch):

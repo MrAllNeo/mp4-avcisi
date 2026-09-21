@@ -55,6 +55,44 @@ def test_dual_stack_proton_import_uses_ipv4_and_preserves_original(tmp_path):
     assert target.stat().st_mode & 0o777 == 0o600
 
 
+def test_railway_secret_is_materialized_privately_and_removed(tmp_path, monkeypatch):
+    encoded = base64.b64encode(config_text().encode()).decode()
+    monkeypatch.setenv('MP4_VPN_CONFIG_B64', encoded)
+    monkeypatch.setenv('MP4_VPN_MODE', 'wireproxy')
+    monkeypatch.setenv('MP4_VPN_COUNTRY', 'nl')
+    gateway = ProtonGateway(tmp_path)
+    calls = []
+
+    async def start_wireproxy(username, password):
+        calls.append((username, password))
+
+    monkeypatch.setattr(gateway, 'start_wireproxy', start_wireproxy)
+
+    async def scenario():
+        assert gateway.configured
+        async with gateway.connection() as proxy:
+            assert gateway.config.read_text() == config_text()
+            assert gateway.config.stat().st_mode & 0o777 == 0o600
+            assert proxy['username'] == 'mp4'
+            assert proxy['password'] == calls[0][1]
+            assert gateway.public()['country'] == 'NL'
+            assert encoded not in json.dumps(gateway.public())
+        assert not gateway.config.exists()
+
+    asyncio.run(scenario())
+
+
+def test_invalid_railway_secret_does_not_leak_or_replace_config(tmp_path, monkeypatch):
+    gateway = ProtonGateway(tmp_path)
+    gateway.config.write_text(config_text())
+    monkeypatch.setenv('MP4_VPN_CONFIG_B64', base64.b64encode(b'PrivateKey = secret-value').decode())
+    with pytest.raises(MediaError) as caught:
+        gateway.materialize_env_config()
+    assert caught.value.code == 'vpn_config'
+    assert 'secret-value' not in str(caught.value)
+    assert gateway.config.read_text() == config_text()
+
+
 def test_ipv6_only_import_preserves_existing_config(tmp_path):
     source = tmp_path / 'proton.conf'
     target = tmp_path / 'gateway/wg0.conf'
