@@ -56,7 +56,8 @@ EVENTS = set('server_started server_stopped job_queued job_started job_finished 
              'tor_bootstrap vpn_prewarm_failed '
              'request_finished request_failed routing_failed browser_transport '
              'analysis_reused analysis_refresh probe_finished strategy_selected '
-             'strategy_rejected admission_rejected'.split())
+             'strategy_rejected admission_rejected '
+             'offload_uploaded offload_failed'.split())
 
 
 class PrivateRotatingHandler(RotatingFileHandler):

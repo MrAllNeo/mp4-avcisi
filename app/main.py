@@ -13,13 +13,13 @@ import time
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, field_validator
 
 from app.errors import MediaError, describe_error
-from app import admission, diagnostics
+from app import admission, diagnostics, objectstore
 from app.admission import AdmissionController, REASON_MESSAGES
 from app.cost import estimate_cost_from_request
 from app.jobstore import ACTIVE, TTL, Job, JobStore
@@ -69,6 +69,23 @@ def finish(job, status, message, code=None, retryable=False):
                        retryable=job.retryable, size=job.size, percent=job.percent)
 
 
+async def offload_result(job, path):
+    """Copy a finished file to object storage so downloads skip our egress.
+
+    A failure here is never fatal: the local file is still on disk and the
+    download endpoint falls back to serving it directly.
+    """
+    if not objectstore.is_configured() or not path.is_file():
+        return False
+    try:
+        await asyncio.to_thread(objectstore.upload, path, job.id)
+    except objectstore.ObjectStoreError as exc:
+        diagnostics.record('offload_failed', job_id=job.id, exc=exc)
+        return False
+    diagnostics.record('offload_uploaded', job_id=job.id, size=job.size)
+    return True
+
+
 def cleanup_expired(now=None):
     now = now if now is not None else time.time()
     for key, value in list(analyses.items()):
@@ -79,6 +96,8 @@ def cleanup_expired(now=None):
                 shutil.rmtree(directory, ignore_errors=True)
     for key, job in list(jobs.items()):
         if job.status not in ACTIVE and job.expires_at is not None and job.expires_at <= now:
+            if job.offloaded:
+                objectstore.delete(job.id)
             JobStore(DATA).remove(key)
             jobs.pop(key, None)
             diagnostics.record('job_expired', job_id=key)
@@ -465,6 +484,7 @@ async def download(job):
             job.percent, job.size = 100, result['size']
             job.strategy = result.get('strategy')
             job.cost_weight = result.get('cost_weight', job.cost_weight)
+            job.offloaded = await offload_result(job, directory / 'video.mp4')
             finish(job, 'complete', 'MP4 dosyan hazır.')
     except asyncio.CancelledError:
         reason = stop_reasons.get(job.id, 'paused')
@@ -676,6 +696,8 @@ async def cancel_download(key: str):
 async def purge_download(key: str):
     async with mutation(key) as job:
         await stop_job(job, 'cancelled')
+        if job.offloaded:
+            objectstore.delete(job.id)
         JobStore(DATA).remove(key)
         jobs.pop(key, None)
 
@@ -686,9 +708,15 @@ async def download_file(key: str):
     if job.status != 'complete':
         raise HTTPException(409, 'Dosya henüz hazır değil.')
     path = DATA / job.id / 'video.mp4'
+    name = re.sub(r'[^\w\s.-]', '', job.title, flags=re.UNICODE).strip()[:100] or 'video'
+    if job.offloaded:
+        try:
+            return RedirectResponse(objectstore.presigned_url(job.id, f'{name}.mp4'), status_code=307)
+        except objectstore.ObjectStoreError as exc:
+            # Signing failed; the local copy is still authoritative.
+            diagnostics.record('offload_failed', job_id=job.id, exc=exc)
     if not path.is_file():
         raise HTTPException(410, 'Dosya bulunamadı. Bağlantıyı yeniden analiz et.')
-    name = re.sub(r'[^\w\s.-]', '', job.title, flags=re.UNICODE).strip()[:100] or 'video'
     return FileResponse(path, filename=f'{name}.mp4', media_type='video/mp4')
 
 
