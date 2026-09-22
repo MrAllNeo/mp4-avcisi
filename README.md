@@ -26,7 +26,7 @@ FFmpeg sistem PATH'inden, `FFMPEG_BINARY` ortam değişkenindeki tam yoldan veya
 2. Başlık, varsa süre, yaklaşık boyut ve mevcut çözünürlükler döner. Her kaynak bu bilgileri sunmaz.
 3. Analiz sırasında oluşan cookie'ler, istek başlıkları ve çözümlenmiş formatlar yalnız sunucuda, 0600 izinli kısa ömürlü bir indirme planında saklanır. İndirme kaynak sayfasını ikinci kez çözümlemeden bu oturumu kullanır.
 4. Seçilen çözünürlüğü aşmayan en iyi kaynak indirilir. `En iyi kalite` üst sınır koymaz.
-5. Ayrı görüntü/ses varsa FFmpeg birleştirir. MP4 kapsayıcısına kayıpsız aktarım denenir; gerekirse H.264/AAC dönüşümü yapılır.
+5. Kaynak dosya `ffprobe` ile analiz edilir; kodek/konteyner bilgisine göre en ucuz yol seçilir (`DIRECT`, `REMUX`, sadece ses/sadece video dönüşümü veya tam dönüşüm). Aşağıdaki "Akıllı işleme" bölümüne bakın.
 6. Kullanıcı videoyu kuyruğa ekler. Aynı anda iki indirme çalışır, diğerleri FIFO sırasıyla başlar. İndirme sürerken başka bir bağlantı analiz edilebilir.
 7. “İndirmelerim” bölümü her işin durumunu, bekleme sırasını ve dosya temizlenme saatini gösterir. Duraklat, devam et, iptal et, indir ve sil işlemleri ayrı ayrı yapılabilir.
 8. Sayfa kapansa veya sunucu yeniden başlatılsa da kayıtlar kalır. Yeniden başlatmada yarım kalan işler duraklatılmış olarak açılır; kullanıcı “Devam et” ile sürdürür.
@@ -40,6 +40,42 @@ FFmpeg sistem PATH'inden, `FFMPEG_BINARY` ortam değişkenindeki tam yoldan veya
 - “İptal et” kısmi dosyaları kaldırır. “Sil” hem iş kaydını hem dosyalarını siler. Cihaza daha önce kaydettiğin dosya etkilenmez.
 
 Doğrudan MP4, yt-dlp'nin desteklediği site/oynatıcılar ve yerel indiriciyle çözülebilen korumasız HLS/DASH akışları hedeflenir. Bir sayfada birden fazla video varsa ilk video kullanılır. Site desteği, o sitenin güncel davranışına bağlıdır. yt-dlp için [resmî belgeler](https://github.com/yt-dlp/yt-dlp) ve [desteklenen siteler](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md).
+
+## Akıllı işleme ve kapasite yönetimi
+
+Her indirilen dosya körlemesine yeniden kodlanmaz. İndirme bitince `ffprobe` ile gerçek kodek/konteyner bilgisi okunur (`app/probe.py`) ve saf, test edilebilir bir sınıflandırıcı (`app/strategy.py`) yedi stratejiden birini seçer:
+
+| Strateji | Ne zaman seçilir | Maliyet |
+|---|---|---:|
+| `DIRECT` | Kaynak zaten uyumlu kodekte ve MP4 konteynerinde | En düşük — FFmpeg hiç çalıştırılmaz |
+| `REMUX` / `MERGE_COPY` | Kodekler uyumlu, yalnız konteyner değişmeli | Düşük — yalnız `-c copy` |
+| `AUDIO_TRANSCODE` | Video uyumlu, ses değil | Orta |
+| `VIDEO_TRANSCODE` | Ses uyumlu, video değil | Yüksek |
+| `FULL_TRANSCODE` | İkisi de uyumsuz, ya da seçilen ucuz strateji pratikte başarısız oldu | En yüksek |
+| `REJECT` | Video akışı yok veya süre sınırı aşıldı | — |
+
+İndirme isteğinde iki dönüştürme tercihi vardır:
+
+- **Hızlı / Orijinal** (`compatibility: "fast"`, varsayılan): kaynak kodeği FFmpeg MP4'e taşıyabildiği sürece korunur (H.264, HEVC, VP9, AV1, MPEG-4 video; AAC, MP3, Opus, Vorbis, AC3/E-AC3, FLAC ses).
+- **Uyumlu MP4** (`compatibility: "compatible"`): yalnız H.264 + AAC/MP3 kopyalanır; diğer her şey yaygın cihaz/tarayıcı uyumluluğu için yeniden kodlanır (`yuv420p`, `+faststart`).
+
+Seçilen ucuz strateji FFmpeg tarafından pratikte reddedilirse (ör. beklenmedik kodek özelliği), tek bir güvenlik ağı olarak tam yeniden kodlamaya düşülür; sonsuz geri dönüş zinciri kurulmaz.
+
+Her iş için kaba, açıklanabilir bir maliyet puanı hesaplanır (`app/cost.py`): çözünürlüğe göre 3-8 arası taban puan, yüksek FPS/HDR/uzun süre için ek puan. Sunucu bu puanı ve gerçek zamanlı CPU/RAM/geçici disk kullanımını (`app/admission.py`, `psutil` ile) bir işi **başlatmadan hemen önce** kontrol eder — kuyruğa alma sırasında değil, yalnızca "running" işler bütçeye sayılır, böylece kuyruk uzunluğu ile eşzamanlı işlem sayısı birbirinden ayrı kalır. Kapasite yoksa iş `queued` durumunda "Sunucu kapasitesi bekleniyor…" mesajıyla bekler; `MP4_ADMISSION_WAIT_TIMEOUT`'a (kod içinde `ADMISSION_WAIT_TIMEOUT`, varsayılan 300 sn) ulaşılırsa iş `capacity_unavailable` koduyla, yeniden denenebilir biçimde başarısız olur.
+
+Yapılandırılabilir eşikler (hepsi ortam değişkeni):
+
+```
+MP4_CPU_SOFT_LIMIT_PERCENT=75      # üzerindeyken yeni "ağır" iş kabul edilmez
+MP4_CPU_HARD_LIMIT_PERCENT=88      # üzerindeyken hiçbir yeni iş kabul edilmez
+MP4_MIN_FREE_MEMORY_MB=1536
+MP4_TEMP_DISK_SOFT_LIMIT_PERCENT=75  # (şu an yalnız bilgi amaçlı izlenir)
+MP4_TEMP_DISK_HARD_LIMIT_PERCENT=85
+MP4_MAX_ACTIVE_COST=8              # aynı anda çalışan işlerin toplam maliyet bütçesi
+MP4_MAX_HEAVY_JOBS=1               # aynı anda VIDEO_TRANSCODE/FULL_TRANSCODE sayısı
+```
+
+Anlık kapasite ve kuyruk durumu `GET /api/metrics` üzerinden görülebilir (diğer uçlarla aynı isteğe bağlı kimlik doğrulamasına tabidir).
 
 ## Sınırlar ve dağıtım
 
@@ -61,7 +97,7 @@ Doğrudan MP4, yt-dlp'nin desteklediği site/oynatıcılar ve yerel indiriciyle 
 .venv/bin/python -m pytest -q
 ```
 
-`app/network.py` ağ sınırını, `app/worker.py` kaynak çözümleme ve MP4 hazırlamayı, `app/main.py` API/kuyruk yönetimini, `app/jobstore.py` kalıcı iş kayıtlarını, `app/errors.py` güvenli hata mesajlarını ve `app/diagnostics.py` yapılandırılmış logları içerir. `static/` bağımsız Türkçe arayüzdür; frontend derleme adımı yoktur.
+`app/network.py` ağ sınırını, `app/worker.py` kaynak çözümleme ve MP4 hazırlamayı, `app/probe.py` ffprobe tabanlı analizi, `app/strategy.py` saf strateji seçiciyi, `app/cost.py` iş maliyet puanlamasını, `app/admission.py` CPU/RAM/disk tabanlı kabul kontrolünü, `app/main.py` API/kuyruk yönetimini, `app/jobstore.py` kalıcı iş kayıtlarını, `app/errors.py` güvenli hata mesajlarını ve `app/diagnostics.py` yapılandırılmış logları içerir. `static/` bağımsız Türkçe arayüzdür; frontend derleme adımı yoktur.
 
 Otomatik testler ağ sınırını, API davranışlarını, kuyruk kapasitesini, duraklat/devam et, yeniden başlatma, silme ve süre sonu temizliğini kapsar. Gerçek yt-dlp + FFmpeg ile küçük yerel MP4, gömülü HTML, HLS ve ayrı ses/görüntülü DASH dosyaları indirilip çözümlenir. HTTP Range testi, kısmi bir indirmede yalnız kalan baytların istendiğini doğrular. Bu testlerde loopback fixture'ına erişmek için ağ koruması yalnız test kapsamında devre dışı bırakılır.
 

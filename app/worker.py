@@ -11,9 +11,27 @@ from urllib.parse import quote, urlsplit
 
 from app.diagnostics import exception_fields, safe_fields
 from app.network import guard_network, validate_url
-from app.media import get_ffmpeg
+from app.media import get_ffmpeg, get_ffprobe
 from app.errors import MediaError, describe_error
 from app.source_trace import trace_requests
+from app.probe import run_ffprobe
+from app.strategy import ProcessingPlan, Strategy, ffmpeg_args_for, select_strategy
+from app.cost import actual_cost
+
+STRATEGY_MESSAGES = {
+    Strategy.REMUX: "MP4 dosyası hazırlanıyor…",
+    Strategy.MERGE_COPY: "MP4 dosyası hazırlanıyor…",
+    Strategy.AUDIO_TRANSCODE: "Ses MP4 uyumlu hâle getiriliyor…",
+    Strategy.VIDEO_TRANSCODE: "Video MP4 biçimine dönüştürülüyor…",
+    Strategy.FULL_TRANSCODE: "Video MP4 biçimine dönüştürülüyor…",
+}
+STRATEGY_TIMEOUTS = {
+    Strategy.REMUX: 180,
+    Strategy.MERGE_COPY: 180,
+    Strategy.AUDIO_TRANSCODE: 240,
+    Strategy.VIDEO_TRANSCODE: 600,
+    Strategy.FULL_TRANSCODE: 600,
+}
 
 DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024
 
@@ -217,6 +235,7 @@ def run():
     mode = payload["mode"]
     directory = Path(payload.get("directory", ".")).resolve()
     ffmpeg = get_ffmpeg()
+    ffprobe = get_ffprobe()
     cookie_file = directory / COOKIE_FILE
 
     options = {
@@ -321,29 +340,50 @@ def run():
         raise MediaError("incomplete_download", "Video dosyası tamamlanamadı. Başka bir kalite veya bağlantı dene.", True)
     source = files[0]
     check_size(source.stat().st_size, "source_file")
-    probe = run_ffmpeg("probe", [ffmpeg, "-nostdin", "-hide_banner", "-protocol_whitelist", "file,pipe",
-                            "-i", str(source)], timeout=30)
-    duration = re.search(rb"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", probe.stderr)
-    if duration:
-        hours, minutes, seconds = map(float, duration.groups())
-        if hours * 3600 + minutes * 60 + seconds > 7200:
-            raise MediaError("duration_limit", "İlk sürümde en fazla 2 saatlik videolar destekleniyor.")
-    emit(event="progress", percent=None, message="MP4 dosyası hazırlanıyor…")
+    stage("probe")
+    probe_result = run_ffprobe(source, ffprobe_binary=ffprobe, timeout=30)
+    known_video_codecs = {'h264', 'hevc', 'vp9', 'av1', 'vp8', 'mpeg4'}
+    known_audio_codecs = {'aac', 'mp3', 'opus', 'vorbis', 'ac3', 'eac3', 'flac', 'dts'}
+    video_codec = probe_result.primary_video.codec if probe_result.primary_video else None
+    audio_codec = probe_result.primary_audio.codec if probe_result.primary_audio else None
+    diagnostic(
+        "probe_finished",
+        duration=probe_result.duration_seconds,
+        video_codec=video_codec if video_codec in known_video_codecs else ("none" if video_codec is None else "other"),
+        audio_codec=audio_codec if audio_codec in known_audio_codecs else ("none" if audio_codec is None else "other"),
+    )
+    if probe_result.duration_seconds is not None and probe_result.duration_seconds > 7200:
+        raise MediaError("duration_limit", "İlk sürümde en fazla 2 saatlik videolar destekleniyor.")
+
+    plan = select_strategy(probe_result, preference=payload.get("compatibility", "fast"))
+    if plan.strategy == Strategy.REJECT:
+        diagnostic("strategy_rejected", strategy_reason=plan.reason)
+        raise MediaError("unsupported", "Bu videonun içeriği işlenemedi. Başka bir kalite veya bağlantı dene.")
+    diagnostic("strategy_selected", strategy=plan.strategy.value, strategy_reason=plan.reason)
+
     target = directory / "video.mp4"
-    base = [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-            "-protocol_whitelist", "file,pipe", "-i", str(source),
-            "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn"]
-    result = run_ffmpeg("remux", base + ["-c", "copy", "-movflags", "+faststart", str(target)], timeout=180)
-    if result.returncode:
-        emit(event="progress", percent=None, message="Video MP4 biçimine dönüştürülüyor…")
-        run_ffmpeg("transcode", base + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                              "-c:a", "aac", "-movflags", "+faststart", str(target)],
-                       check=True, timeout=600)
+    if plan.strategy == Strategy.DIRECT:
+        stage("finalize")
+        os.replace(source, target)
+    else:
+        emit(event="progress", percent=None, message=STRATEGY_MESSAGES[plan.strategy])
+        args = ffmpeg_args_for(plan, ffmpeg, source, target)
+        result = run_ffmpeg(plan.strategy.value.lower(), args, timeout=STRATEGY_TIMEOUTS[plan.strategy])
+        if result.returncode and plan.strategy != Strategy.FULL_TRANSCODE:
+            # The classified cheap strategy failed in practice (ffmpeg itself
+            # rejected it) — full re-encode is the one safety-net fallback.
+            emit(event="progress", percent=None, message=STRATEGY_MESSAGES[Strategy.FULL_TRANSCODE])
+            fallback = ProcessingPlan(Strategy.FULL_TRANSCODE, "fallback_after_failure")
+            run_ffmpeg("transcode", ffmpeg_args_for(fallback, ffmpeg, source, target), check=True, timeout=600)
+            plan = fallback
+        elif result.returncode:
+            raise MediaError("conversion_failed", "Video MP4 biçimine dönüştürülemedi. Başka bir kalite dene.")
+        source.unlink()
     stage("finalize")
     if not target.exists() or not target.stat().st_size:
         raise MediaError("conversion_failed", "MP4 oluşturulamadı. Başka bir kalite dene.")
-    source.unlink()
-    emit(event="result", size=target.stat().st_size)
+    emit(event="result", size=target.stat().st_size, strategy=plan.strategy.value,
+         cost_weight=actual_cost(plan.strategy, probe_result))
 
 
 if __name__ == "__main__":

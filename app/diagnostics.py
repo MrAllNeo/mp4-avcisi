@@ -27,15 +27,26 @@ CHOICES = {
     'origin_relation': {'same', 'other'},
     'source_hint': {'generic_fallback', 'browser_transport_unavailable', 'unknown'},
     'route': {'direct', 'vpn', 'proton'},
-    'stage': {'startup', 'extract', 'download', 'probe', 'remux', 'transcode', 'finalize', 'storage'},
+    'stage': {'startup', 'extract', 'download', 'probe', 'remux', 'merge_copy', 'audio_transcode',
+              'video_transcode', 'full_transcode', 'transcode', 'finalize', 'storage'},
     'mode': {'analyze', 'download'},
     'status': {'queued', 'processing', 'paused', 'cancelled', 'complete', 'error'},
     'basis': {'downloaded', 'content_length', 'source_file', 'temporary_files'},
     'reason': {'no_space', 'invalid_data', 'unsupported_codec', 'missing_stream', 'unknown'},
+    'strategy': {'DIRECT', 'REMUX', 'MERGE_COPY', 'AUDIO_TRANSCODE', 'VIDEO_TRANSCODE',
+                 'FULL_TRANSCODE', 'REJECT'},
+    'strategy_reason': {'already_compatible_mp4', 'compatible_streams_wrong_container',
+                         'incompatible_audio_codec', 'incompatible_video_codec',
+                         'incompatible_video_and_audio', 'duration_limit', 'no_video_stream',
+                         'fallback_after_failure'},
+    'video_codec': {'h264', 'hevc', 'vp9', 'av1', 'vp8', 'mpeg4', 'none', 'other'},
+    'audio_codec': {'aac', 'mp3', 'opus', 'vorbis', 'ac3', 'eac3', 'flac', 'dts', 'none', 'other'},
+    'admission_reason': {'cpu_limit', 'memory_limit', 'disk_limit', 'heavy_slot_limit', 'cost_budget'},
 }
 COUNTS = {'downloaded_bytes', 'total_bytes', 'estimated_bytes', 'limit_bytes', 'size',
           'height', 'percent', 'elapsed_ms', 'timeout_seconds', 'returncode', 'stderr_bytes',
-          'errno', 'line', 'count', 'request_number', 'cookie_count', 'attempt'}
+          'errno', 'line', 'count', 'request_number', 'cookie_count', 'attempt',
+          'duration', 'cost_weight', 'active_cost'}
 EVENTS = set('server_started server_stopped job_queued job_started job_finished job_failed '
              'job_expired job_task_failed storage_failed cleanup_failed worker_started '
              'worker_finished worker_failed worker_cancelled worker_stderr worker_protocol_error '
@@ -44,7 +55,8 @@ EVENTS = set('server_started server_stopped job_queued job_started job_finished 
              'vpn_cleanup_failed vpn_fallback vpn_unconfigured engine_ready '
              'tor_bootstrap vpn_prewarm_failed '
              'request_finished request_failed routing_failed browser_transport '
-             'analysis_reused analysis_refresh'.split())
+             'analysis_reused analysis_refresh probe_finished strategy_selected '
+             'strategy_rejected admission_rejected'.split())
 
 
 class PrivateRotatingHandler(RotatingFileHandler):
