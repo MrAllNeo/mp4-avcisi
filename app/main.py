@@ -13,13 +13,15 @@ import time
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, field_validator
 
 from app.errors import MediaError, describe_error
-from app import diagnostics
+from app import admission, diagnostics, objectstore
+from app.admission import AdmissionController, REASON_MESSAGES
+from app.cost import estimate_cost_from_request
 from app.jobstore import ACTIVE, TTL, Job, JobStore
 from app.network import validate_url
 from app.vpn import VpnGateway, can_retry_via_vpn
@@ -41,6 +43,8 @@ tasks = {}
 stop_reasons = {}
 changing = set()
 gateway = VpnGateway(DATA / 'proton')
+admission_controller = AdmissionController()
+HEAVY_COST_THRESHOLD = 4  # matches cost_for_resolution(720p) — see app/cost.py
 
 
 def save(job):
@@ -65,6 +69,23 @@ def finish(job, status, message, code=None, retryable=False):
                        retryable=job.retryable, size=job.size, percent=job.percent)
 
 
+async def offload_result(job, path):
+    """Copy a finished file to object storage so downloads skip our egress.
+
+    A failure here is never fatal: the local file is still on disk and the
+    download endpoint falls back to serving it directly.
+    """
+    if not objectstore.is_configured() or not path.is_file():
+        return False
+    try:
+        await asyncio.to_thread(objectstore.upload, path, job.id)
+    except objectstore.ObjectStoreError as exc:
+        diagnostics.record('offload_failed', job_id=job.id, exc=exc)
+        return False
+    diagnostics.record('offload_uploaded', job_id=job.id, size=job.size)
+    return True
+
+
 def cleanup_expired(now=None):
     now = now if now is not None else time.time()
     for key, value in list(analyses.items()):
@@ -75,6 +96,8 @@ def cleanup_expired(now=None):
                 shutil.rmtree(directory, ignore_errors=True)
     for key, job in list(jobs.items()):
         if job.status not in ACTIVE and job.expires_at is not None and job.expires_at <= now:
+            if job.offloaded:
+                objectstore.delete(job.id)
             JobStore(DATA).remove(key)
             jobs.pop(key, None)
             diagnostics.record('job_expired', job_id=key)
@@ -94,6 +117,7 @@ async def lifespan(app):
     global slots, analysis_slots, gateway
     gateway = VpnGateway(DATA / 'proton')
     diagnostics.configure(DATA / 'logs')
+    admission.prime_cpu_sampling()
     slots, analysis_slots = asyncio.Semaphore(2), asyncio.Semaphore(1)
     jobs.clear()
     jobs.update(JobStore(DATA).load())
@@ -185,6 +209,14 @@ class AnalyzeInput(BaseModel):
 class DownloadInput(BaseModel):
     analysis_id: str
     height: int | None = Field(default=None, ge=1, le=16384)
+    compatibility: str = Field(default='fast')
+
+    @field_validator('compatibility')
+    @classmethod
+    def valid_compatibility(cls, value):
+        if value not in {'fast', 'compatible'}:
+            raise ValueError("compatibility 'fast' veya 'compatible' olmalı.")
+        return value
 
 
 async def worker(payload, on_event=None, timeout=90):
@@ -395,11 +427,41 @@ async def _worker_once(payload, on_event=None, timeout=90):
         await stderr_reader
 
 
+ADMISSION_WAIT_TIMEOUT = 300
+ADMISSION_POLL_SECONDS = 5
+
+
+async def wait_for_capacity(job):
+    """Blocks (holding this job's slot) until CPU/RAM/disk/cost budget allow it
+    to actually start, or raises a retryable error after a bounded wait.
+    Only 'processing' jobs count against the budget — queued ones are free."""
+    deadline = time.monotonic() + ADMISSION_WAIT_TIMEOUT
+    is_heavy = job.cost_weight >= HEAVY_COST_THRESHOLD
+    while True:
+        active_cost = sum(j.cost_weight for j in jobs.values() if j.status == 'processing' and j.id != job.id)
+        active_heavy = sum(1 for j in jobs.values()
+                            if j.status == 'processing' and j.id != job.id and j.cost_weight >= HEAVY_COST_THRESHOLD)
+        allowed, reason, _ = admission_controller.can_admit(
+            data_dir=DATA, cost_weight=job.cost_weight, is_heavy=is_heavy,
+            active_cost=active_cost, active_heavy_count=active_heavy)
+        if allowed:
+            return
+        diagnostics.record('admission_rejected', admission_reason=reason, cost_weight=job.cost_weight,
+                           active_cost=active_cost)
+        if time.monotonic() >= deadline:
+            raise MediaError('capacity_unavailable',
+                             REASON_MESSAGES.get(reason, 'Sunucu kapasitesi dolu. Daha sonra yeniden dene.'), True)
+        job.message = 'Sunucu kapasitesi bekleniyor…'
+        save(job)
+        await asyncio.sleep(ADMISSION_POLL_SECONDS)
+
+
 async def download(job):
     directory = DATA / job.id
     last_saved = 0
     try:
         async with slots:
+            await wait_for_capacity(job)
             directory.mkdir(mode=0o700, exist_ok=True)
             job.status, job.message = 'processing', 'Kaynak hazırlanıyor…'
             save(job)
@@ -416,9 +478,13 @@ async def download(job):
                         last_saved = time.monotonic()
 
             result = await worker({'mode': 'download', 'url': job.url, 'height': job.height,
-                                   'directory': str(directory), 'job_id': job.id, 'route': job.route}, event, timeout=900)
+                                   'directory': str(directory), 'job_id': job.id, 'route': job.route,
+                                   'compatibility': job.compatibility}, event, timeout=900)
             job.route = result.get('route', job.route)
             job.percent, job.size = 100, result['size']
+            job.strategy = result.get('strategy')
+            job.cost_weight = result.get('cost_weight', job.cost_weight)
+            job.offloaded = await offload_result(job, directory / 'video.mp4')
             finish(job, 'complete', 'MP4 dosyan hazır.')
     except asyncio.CancelledError:
         reason = stop_reasons.get(job.id, 'paused')
@@ -519,8 +585,11 @@ async def create_download(body: DownloadInput):
     ensure_queue_space()
     if len(jobs) >= MAX_JOBS:
         raise HTTPException(429, 'İşlem listesi dolu. Eski işlemlerden birini silip yeniden dene.')
+    cost_weight = estimate_cost_from_request(height=body.height, duration_seconds=entry['metadata'].get('duration'))
     job = Job(uuid4().hex, entry['url'], entry['metadata']['title'], body.height)
     job.route = entry.get('route', 'direct')
+    job.compatibility = body.compatibility
+    job.cost_weight = cost_weight
     analysis_directory = Path(entry['directory']) if entry.get('directory') else None
     if analysis_directory:
         job_directory = DATA / job.id
@@ -627,6 +696,8 @@ async def cancel_download(key: str):
 async def purge_download(key: str):
     async with mutation(key) as job:
         await stop_job(job, 'cancelled')
+        if job.offloaded:
+            objectstore.delete(job.id)
         JobStore(DATA).remove(key)
         jobs.pop(key, None)
 
@@ -637,15 +708,44 @@ async def download_file(key: str):
     if job.status != 'complete':
         raise HTTPException(409, 'Dosya henüz hazır değil.')
     path = DATA / job.id / 'video.mp4'
+    name = re.sub(r'[^\w\s.-]', '', job.title, flags=re.UNICODE).strip()[:100] or 'video'
+    if job.offloaded:
+        try:
+            return RedirectResponse(objectstore.presigned_url(job.id, f'{name}.mp4'), status_code=307)
+        except objectstore.ObjectStoreError as exc:
+            # Signing failed; the local copy is still authoritative.
+            diagnostics.record('offload_failed', job_id=job.id, exc=exc)
     if not path.is_file():
         raise HTTPException(410, 'Dosya bulunamadı. Bağlantıyı yeniden analiz et.')
-    name = re.sub(r'[^\w\s.-]', '', job.title, flags=re.UNICODE).strip()[:100] or 'video'
     return FileResponse(path, filename=f'{name}.mp4', media_type='video/mp4')
 
 
 @app.get('/api/health')
 async def health():
     return {'status': 'ok'}
+
+
+@app.get('/api/metrics')
+async def metrics():
+    active_jobs = [j for j in jobs.values() if j.status in ACTIVE]
+    active_cost = sum(j.cost_weight for j in active_jobs)
+    active_heavy = sum(1 for j in active_jobs if j.cost_weight >= HEAVY_COST_THRESHOLD)
+    snapshot = admission_controller.snapshot(DATA)
+    return {
+        'active_jobs': len(active_jobs),
+        'queue_limit': MAX_PENDING,
+        'active_cost': active_cost,
+        'max_active_cost': admission.MAX_ACTIVE_COST,
+        'active_heavy_jobs': active_heavy,
+        'max_heavy_jobs': admission.MAX_HEAVY_JOBS,
+        'cpu_percent': round(snapshot.cpu_percent, 1),
+        'cpu_soft_limit_percent': admission.CPU_SOFT_LIMIT_PERCENT,
+        'cpu_hard_limit_percent': admission.CPU_HARD_LIMIT_PERCENT,
+        'available_memory_mb': round(snapshot.available_memory_mb, 1),
+        'min_free_memory_mb': admission.MIN_FREE_MEMORY_MB,
+        'disk_percent': round(snapshot.disk_percent, 1),
+        'temp_disk_hard_limit_percent': admission.TEMP_DISK_HARD_LIMIT_PERCENT,
+    }
 
 
 @app.get('/api/network')

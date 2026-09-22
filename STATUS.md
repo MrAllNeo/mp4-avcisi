@@ -1,0 +1,23 @@
+# Akıllı medya işleme — durum
+
+Bu belge, "FWT Akıllı Medya İşleme ve Otomatik Kaynak Yönetimi" görev tanımının bu repodaki (MP4 Avcısı / mp4-avcisi) uygulanma durumunu özetler.
+
+## Yapılanlar
+
+- **Aşama 1 (modeller + strateji seçici)** — `app/probe.py` (`MediaProbeResult`), `app/strategy.py` (`ProcessingPlan`, `select_strategy`), `app/cost.py` (`estimate_cost_from_request`, `actual_cost`). Saf, I/O'suz, birim testli (`tests/test_strategy.py`, `tests/test_cost.py`).
+- **Aşama 2 (güvenli probe + process runner)** — `app/probe.py::run_ffprobe` gerçek `ffprobe -show_format -show_streams -of json` kullanır (önceki sürüm süreyi ffmpeg stderr'inden regex ile kazıyordu ve hiç ffprobe çağırmıyordu). Argüman dizisi + zaman aşımı + boyut sınırı korunuyor; mevcut `run_ffmpeg` zaten shell'siz ve zaman aşımlıydı, değişmedi. `tests/test_probe.py` gerçek ffmpeg/ffprobe ile üretilmiş H.264/AAC ve VP9/Opus fixture'larına karşı çalışır.
+- **Aşama 3 (kuyruk + scheduler)** — `app/admission.py` (`AdmissionController`, `psutil` ile CPU/RAM/disk okuma). Kabul kontrolü kuyruğa alma anında değil, bir işin gerçekten çalışmaya başlayacağı anda (`app/main.py::wait_for_capacity`, `slots` semaforu içinde) uygulanır; yalnızca `processing` durumundaki işler maliyet bütçesine sayılır, `queued` işler saymaz — kuyruk uzunluğu ile eşzamanlılık ayrı tutuldu. Kapasite yoksa iş sınırlı bir süre (`ADMISSION_WAIT_TIMEOUT`, öntanımlı 300 sn) bekler, sonra `capacity_unavailable` ile yeniden denenebilir biçimde başarısız olur. `GET /api/metrics` eklendi. Testler: `tests/test_admission.py`, `tests/test_admission_integration.py`.
+- **Aşama 4 (MP4 Avcısı entegrasyonu)** — `app/worker.py`'daki sabit "her zaman remux dene, olmazsa transcode et" mantığı kaldırıldı; gerçek ffprobe sonucuna göre 7 stratejiden biri seçiliyor. `compatibility` alanı (`fast` | `compatible`) API'ye, worker payload'una ve FWT'deki `Mp4Hunter.tsx` arayüzüne eklendi. Tek güvenlik ağı: seçilen ucuz strateji pratikte başarısız olursa tam yeniden kodlamaya düşülür (eski davranışla aynı fallback ilkesi, artık 7 stratejiye genelleştirilmiş).
+- **Aşama 6'nın bir kısmı** — `/api/metrics`, README güncellemesi, bu belge. `requirements.txt`/`requirements.lock` içine `psutil` eklendi.
+
+## Kasıtlı olarak yapılmayanlar / kapsam dışı bırakılanlar
+
+- **`MERGE_COPY` gerçek bir yol olarak asla seçilmiyor.** Bu pipeline, ffprobe'a vermeden önce yt-dlp ile ses/görüntüyü zaten birleştiriyor (`merge_output_format: mkv`), dolayısıyla "ayrı akışları birleştir" durumu ile "zaten birleşik dosyayı yeniden kapsayıcıya taşı" durumu ffprobe çıktısından ayırt edilemiyor. İkisi de aynı `-c copy` komutuna eşleniyor; `MERGE_COPY` API/enum tamlığı için duruyor ama pratikte hep `REMUX` seçiliyor. Bunu düzeltmenin tek yolu, yt-dlp'nin ayrı akışları FFmpeg'e ayrı ayrı vermesini sağlayacak bir pipeline değişikliği, bu görev kapsamının dışında tutuldu (mevcut davranışı bozma riski, kazanılan netliğe değmiyor).
+- **`DIRECT` nadiren tetiklenir.** yt-dlp `merge_output_format: mkv` kullandığı için ayrı akışlı kaynaklar hep `.mkv` olarak iner; yalnızca zaten tek dosya + doğrudan MP4 sunan kaynaklarda (bazı progressive MP4 barındıran siteler) `DIRECT` gerçekten devreye girer. Bu, pipeline'ın kendi tasarımından kaynaklanıyor, bir hata değil.
+- **Toplam depolama bütçesi / kullanıcı bazlı kota eklenmedi.** Mevcut sistem zaten tek kullanıcılı, localhost-öncelikli bir araç (`README.md`'deki "Sınırlar ve dağıtım" bölümü bunu zaten belirtiyor); kullanıcı kimliği/kota kavramı olmadan "kullanıcı başına" bir bütçe anlamsız olurdu. Bu, görevin kendi kabul kriterlerinde de "internete açılacak sürüm için" ayrıca not edilmiş bir sonraki adım olarak bırakıldı.
+- **Yük testleri (16.3) otomatikleştirilmedi.** `tests/test_admission_integration.py` admission kontrolcüsünü ve kapasite bekleme/timeout davranışını mock'lanmış kaynak anlık görüntüleriyle test ediyor, ama "100 iş kuyrukta, aktif maliyet sınırı 8" gibi gerçek ölçekli bir yük senaryosu koşturulmadı. Mevcut testler mantığın doğruluğunu kanıtlıyor; ölçek/performans doğrulaması için ayrı bir yük testi altyapısı (ör. `locust`/`k6`) kurulmalı.
+- **Sahne Avcısı bu repoya entegre edilmedi.** Bkz. ana oturumun nihai raporu — Sahne Avcısı FWT'ye hiç bağlı değildi ve bu görevin kapsamı "medya işleme kaynak yönetimi" idi, "yeni bir ürün yüzeyi ekleme" değil; bu bilinçli bir kapsam kararıdır, unutkanlık değil.
+
+## Doğrulama
+
+`'.venv/bin/python -m pytest -q'` → 220 test geçti (bu değişiklikten önce: 178). Gerçek `ffmpeg`/`ffprobe` bu ortamda kuruldu ve testler onlara karşı çalıştırıldı (sahte/mock değil). FWT tarafında `npm test` (backend 67, frontend 91) ve `npx tsc --noEmit` (her iki paket) hatasız geçti.

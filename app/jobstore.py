@@ -28,6 +28,10 @@ class Job:
     retryable: bool = False
     expires_at: float | None = None
     route: str = 'direct'
+    compatibility: str = 'fast'
+    cost_weight: int = 1
+    strategy: str | None = None
+    offloaded: bool = False
 
     def public(self):
         result = asdict(self)

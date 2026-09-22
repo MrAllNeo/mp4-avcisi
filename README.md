@@ -26,7 +26,7 @@ FFmpeg sistem PATH'inden, `FFMPEG_BINARY` ortam değişkenindeki tam yoldan veya
 2. Başlık, varsa süre, yaklaşık boyut ve mevcut çözünürlükler döner. Her kaynak bu bilgileri sunmaz.
 3. Analiz sırasında oluşan cookie'ler, istek başlıkları ve çözümlenmiş formatlar yalnız sunucuda, 0600 izinli kısa ömürlü bir indirme planında saklanır. İndirme kaynak sayfasını ikinci kez çözümlemeden bu oturumu kullanır.
 4. Seçilen çözünürlüğü aşmayan en iyi kaynak indirilir. `En iyi kalite` üst sınır koymaz.
-5. Ayrı görüntü/ses varsa FFmpeg birleştirir. MP4 kapsayıcısına kayıpsız aktarım denenir; gerekirse H.264/AAC dönüşümü yapılır.
+5. Kaynak dosya `ffprobe` ile analiz edilir; kodek/konteyner bilgisine göre en ucuz yol seçilir (`DIRECT`, `REMUX`, sadece ses/sadece video dönüşümü veya tam dönüşüm). Aşağıdaki "Akıllı işleme" bölümüne bakın.
 6. Kullanıcı videoyu kuyruğa ekler. Aynı anda iki indirme çalışır, diğerleri FIFO sırasıyla başlar. İndirme sürerken başka bir bağlantı analiz edilebilir.
 7. “İndirmelerim” bölümü her işin durumunu, bekleme sırasını ve dosya temizlenme saatini gösterir. Duraklat, devam et, iptal et, indir ve sil işlemleri ayrı ayrı yapılabilir.
 8. Sayfa kapansa veya sunucu yeniden başlatılsa da kayıtlar kalır. Yeniden başlatmada yarım kalan işler duraklatılmış olarak açılır; kullanıcı “Devam et” ile sürdürür.
@@ -41,12 +41,49 @@ FFmpeg sistem PATH'inden, `FFMPEG_BINARY` ortam değişkenindeki tam yoldan veya
 
 Doğrudan MP4, yt-dlp'nin desteklediği site/oynatıcılar ve yerel indiriciyle çözülebilen korumasız HLS/DASH akışları hedeflenir. Bir sayfada birden fazla video varsa ilk video kullanılır. Site desteği, o sitenin güncel davranışına bağlıdır. yt-dlp için [resmî belgeler](https://github.com/yt-dlp/yt-dlp) ve [desteklenen siteler](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md).
 
+## Akıllı işleme ve kapasite yönetimi
+
+Her indirilen dosya körlemesine yeniden kodlanmaz. İndirme bitince `ffprobe` ile gerçek kodek/konteyner bilgisi okunur (`app/probe.py`) ve saf, test edilebilir bir sınıflandırıcı (`app/strategy.py`) yedi stratejiden birini seçer:
+
+| Strateji | Ne zaman seçilir | Maliyet |
+|---|---|---:|
+| `DIRECT` | Kaynak zaten uyumlu kodekte ve MP4 konteynerinde | En düşük — FFmpeg hiç çalıştırılmaz |
+| `REMUX` / `MERGE_COPY` | Kodekler uyumlu, yalnız konteyner değişmeli | Düşük — yalnız `-c copy` |
+| `AUDIO_TRANSCODE` | Video uyumlu, ses değil | Orta |
+| `VIDEO_TRANSCODE` | Ses uyumlu, video değil | Yüksek |
+| `FULL_TRANSCODE` | İkisi de uyumsuz, ya da seçilen ucuz strateji pratikte başarısız oldu | En yüksek |
+| `REJECT` | Video akışı yok veya süre sınırı aşıldı | — |
+
+İndirme isteğinde iki dönüştürme tercihi vardır:
+
+- **Hızlı / Orijinal** (`compatibility: "fast"`, varsayılan): kaynak kodeği FFmpeg MP4'e taşıyabildiği sürece korunur (H.264, HEVC, VP9, AV1, MPEG-4 video; AAC, MP3, Opus, Vorbis, AC3/E-AC3, FLAC ses).
+- **Uyumlu MP4** (`compatibility: "compatible"`): yalnız H.264 + AAC/MP3 kopyalanır; diğer her şey yaygın cihaz/tarayıcı uyumluluğu için yeniden kodlanır (`yuv420p`, `+faststart`).
+
+Seçilen ucuz strateji FFmpeg tarafından pratikte reddedilirse (ör. beklenmedik kodek özelliği), tek bir güvenlik ağı olarak tam yeniden kodlamaya düşülür; sonsuz geri dönüş zinciri kurulmaz.
+
+Her iş için kaba, açıklanabilir bir maliyet puanı hesaplanır (`app/cost.py`): çözünürlüğe göre 3-8 arası taban puan, yüksek FPS/HDR/uzun süre için ek puan. Sunucu bu puanı ve gerçek zamanlı CPU/RAM/geçici disk kullanımını (`app/admission.py`, `psutil` ile) bir işi **başlatmadan hemen önce** kontrol eder — kuyruğa alma sırasında değil, yalnızca "running" işler bütçeye sayılır, böylece kuyruk uzunluğu ile eşzamanlı işlem sayısı birbirinden ayrı kalır. Kapasite yoksa iş `queued` durumunda "Sunucu kapasitesi bekleniyor…" mesajıyla bekler; `MP4_ADMISSION_WAIT_TIMEOUT`'a (kod içinde `ADMISSION_WAIT_TIMEOUT`, varsayılan 300 sn) ulaşılırsa iş `capacity_unavailable` koduyla, yeniden denenebilir biçimde başarısız olur.
+
+Yapılandırılabilir eşikler (hepsi ortam değişkeni):
+
+```
+MP4_CPU_SOFT_LIMIT_PERCENT=75      # üzerindeyken yeni "ağır" iş kabul edilmez
+MP4_CPU_HARD_LIMIT_PERCENT=88      # üzerindeyken hiçbir yeni iş kabul edilmez
+MP4_MIN_FREE_MEMORY_MB=1536
+MP4_TEMP_DISK_SOFT_LIMIT_PERCENT=75  # (şu an yalnız bilgi amaçlı izlenir)
+MP4_TEMP_DISK_HARD_LIMIT_PERCENT=85
+MP4_MAX_ACTIVE_COST=8              # aynı anda çalışan işlerin toplam maliyet bütçesi
+MP4_MAX_HEAVY_JOBS=1               # aynı anda VIDEO_TRANSCODE/FULL_TRANSCODE sayısı
+```
+
+Anlık kapasite ve kuyruk durumu `GET /api/metrics` üzerinden görülebilir (diğer uçlarla aynı isteğe bağlı kimlik doğrulamasına tabidir).
+
 ## Sınırlar ve dağıtım
 
 - Bu sürüm tek kullanıcı için **localhost** üzerinde çalışır; internete açık bir hizmet olarak yayımlanmamıştır. Host kontrolü localhost ile sınırlıdır.
 - Geçici uzaktan testlerde `MP4_ALLOWED_HOSTS` ile host listesi, `MP4_ACCESS_USER` ve `MP4_ACCESS_PASSWORD` ile HTTP Basic giriş zorunluluğu ayarlanabilir. Ayrı bir sunucu proxy'si `MP4_INTERNAL_TOKEN` değerini `X-MP4-Internal-Token` başlığında göndererek aynı API'ye erişebilir; bu token tarayıcıya verilmemelidir. `/api/health` sağlık kontrolü için açık kalır.
 - DRM, giriş isteyen kaynaklar ve canlı yayınlar desteklenmez. JavaScript çalıştırarak ağ trafiği yakalama henüz eklenmemiştir. Bölgesel/ağ erişim hatalarında yapılandırılmış Tor veya WireGuard üzerinden bir alternatif deneme yapılabilir; giriş, CAPTCHA veya DRM kaldırılmaz.
 - Dosya başına varsayılan 2 GB kaynak sınırı, 2 saat video süresi, eşzamanlı iki indirme ve kuyruk beklemesi hariç en fazla 15 dakika hazırlama süresi vardır. Çalışanlar dahil en fazla 10 iş sıraya alınır; toplam 20 kayıt saklanır. Analiz için ayrı bir işlem yuvası bulunur. Kaynak sınırı `MP4_MAX_BYTES`, geçici işlem diski sınırı `MP4_MAX_DISK_BYTES` ile bayt cinsinden değiştirilebilir. Birleştirme/dönüşüm sonucunun boyutu kaynak boyutundan farklı olabilir.
+- Bitmiş dosyalar isteğe bağlı olarak S3 uyumlu bir nesne deposuna (Cloudflare R2) yüklenebilir. Açıkken indirme uç noktası dosyayı kendi üzerinden akıtmak yerine kısa ömürlü imzalı bir adrese yönlendirir; R2 egress ücreti almadığı için en büyük değişken maliyet kalemi ortadan kalkar. `MP4_R2_ENDPOINT`, `MP4_R2_BUCKET`, `MP4_R2_ACCESS_KEY_ID` ve `MP4_R2_SECRET_ACCESS_KEY` birlikte verilmezse özellik kapalıdır ve dosya bugünkü gibi yerelden servis edilir. İmzalı adres ömrü `MP4_R2_URL_TTL` ile ayarlanır (varsayılan 3600 sn, 60–604800 arasına kısılır). Yükleme veya imzalama başarısız olursa iş hataya düşmez, yerel servise geri çekilir. İş temizlendiğinde nesne de silinir.
 - Bitmiş, duraklatılmış, iptal edilmiş ve başarısız işler **son durum değişiminden bir saat sonra** temizlenir. Çalışan işin dosyası süre doldu diye silinmez. Temizleme her 60 saniyede ve API erişimlerinde yapılır.
 - İş kayıtları `.data/<id>.json` dosyalarında atomik olarak saklanır. Kaynak URL'si devam edebilmek için kayda yazılır; bu dosyalar yalnız işletim sistemindeki kullanıcı tarafından okunabilir (0600), `.data/` izinleri 0700'dür. API listesi kaynak URL'sini döndürmez. Analiz sonuçları bellektedir; sunucu yeniden başlatılınca yeni indirmeler için tekrar analiz gerekir.
 - Bu sürüm **tek Uvicorn worker** içindir. Yerel uygulamayı açan tarayıcılar aynı iş listesini görür; çok kullanıcılı hesap/oturum ayrımı yoktur.
@@ -61,7 +98,7 @@ Doğrudan MP4, yt-dlp'nin desteklediği site/oynatıcılar ve yerel indiriciyle 
 .venv/bin/python -m pytest -q
 ```
 
-`app/network.py` ağ sınırını, `app/worker.py` kaynak çözümleme ve MP4 hazırlamayı, `app/main.py` API/kuyruk yönetimini, `app/jobstore.py` kalıcı iş kayıtlarını, `app/errors.py` güvenli hata mesajlarını ve `app/diagnostics.py` yapılandırılmış logları içerir. `static/` bağımsız Türkçe arayüzdür; frontend derleme adımı yoktur.
+`app/network.py` ağ sınırını, `app/worker.py` kaynak çözümleme ve MP4 hazırlamayı, `app/probe.py` ffprobe tabanlı analizi, `app/strategy.py` saf strateji seçiciyi, `app/cost.py` iş maliyet puanlamasını, `app/admission.py` CPU/RAM/disk tabanlı kabul kontrolünü, `app/main.py` API/kuyruk yönetimini, `app/jobstore.py` kalıcı iş kayıtlarını, `app/errors.py` güvenli hata mesajlarını ve `app/diagnostics.py` yapılandırılmış logları içerir. `static/` bağımsız Türkçe arayüzdür; frontend derleme adımı yoktur.
 
 Otomatik testler ağ sınırını, API davranışlarını, kuyruk kapasitesini, duraklat/devam et, yeniden başlatma, silme ve süre sonu temizliğini kapsar. Gerçek yt-dlp + FFmpeg ile küçük yerel MP4, gömülü HTML, HLS ve ayrı ses/görüntülü DASH dosyaları indirilip çözümlenir. HTTP Range testi, kısmi bir indirmede yalnız kalan baytların istendiğini doğrular. Bu testlerde loopback fixture'ına erişmek için ağ koruması yalnız test kapsamında devre dışı bırakılır.
 

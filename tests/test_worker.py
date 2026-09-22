@@ -119,6 +119,18 @@ def test_pipeline_falls_back_to_transcode_and_only_reports_valid_result(tmp_path
     monkeypatch.setattr(worker, 'trace_requests', lambda *args: None)
     monkeypatch.setattr(worker, 'guard_network', lambda: None)
     monkeypatch.setattr(worker, 'get_ffmpeg', lambda: 'ffmpeg')
+    monkeypatch.setattr(worker, 'get_ffprobe', lambda: 'ffprobe')
+    from app.probe import AudioStreamInfo, MediaProbeResult, VideoStreamInfo
+    # h264+aac in an mkv/webm container classifies as REMUX (compatible codecs,
+    # wrong container); the fallback path under test kicks in when that fails.
+    fake_probe = MediaProbeResult(
+        container='matroska,webm', duration_seconds=2.0, estimated_size_bytes=7,
+        overall_bitrate=1000, protocol='file', seekable=True,
+        video_streams=[VideoStreamInfo(codec='h264', codec_profile=None, width=640, height=360,
+                                        fps=30.0, bitrate=500_000, pixel_format='yuv420p', hdr=False)],
+        audio_streams=[AudioStreamInfo(codec='aac', sample_rate=48000, channels=2, bitrate=96_000)],
+    )
+    monkeypatch.setattr(worker, 'run_ffprobe', lambda *a, **kw: fake_probe)
     monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps({
         'mode': 'download', 'url': 'https://example.com/sample', 'directory': str(tmp_path),
     })))
@@ -126,8 +138,6 @@ def test_pipeline_falls_back_to_transcode_and_only_reports_valid_result(tmp_path
     def ffmpeg(command, **kwargs):
         commands.append(command)
         if len(commands) == 1:
-            return subprocess.CompletedProcess(command, 1, b'', b'Duration: 00:00:02.00')
-        if len(commands) == 2:
             (tmp_path / 'video.mp4').write_bytes(b'broken-remux')
             return subprocess.CompletedProcess(command, 1, b'', b'codec not supported')
         assert command[command.index('-c:v') + 1] == 'libx264'
@@ -144,7 +154,7 @@ def test_pipeline_falls_back_to_transcode_and_only_reports_valid_result(tmp_path
             worker.run()
         assert (tmp_path / 'source.webm').exists()
     emitted = events(capsys)
-    assert len(commands) == 3
+    assert len(commands) == 2
     assert any(e.get('fields', {}).get('stage') == 'transcode' for e in emitted)
     assert any(e['event'] == 'result' for e in emitted) is transcode_ok
 
@@ -178,6 +188,16 @@ def test_stale_browser_manifest_is_refreshed_once(tmp_path, monkeypatch, capsys)
     monkeypatch.setattr(worker, 'trace_requests', lambda *args: None)
     monkeypatch.setattr(worker, 'guard_network', lambda *args, **kwargs: None)
     monkeypatch.setattr(worker, 'get_ffmpeg', lambda: 'ffmpeg')
+    monkeypatch.setattr(worker, 'get_ffprobe', lambda: 'ffprobe')
+    from app.probe import AudioStreamInfo, MediaProbeResult, VideoStreamInfo
+    fake_probe = MediaProbeResult(
+        container='matroska,webm', duration_seconds=2.0, estimated_size_bytes=7,
+        overall_bitrate=1000, protocol='file', seekable=True,
+        video_streams=[VideoStreamInfo(codec='h264', codec_profile=None, width=640, height=360,
+                                        fps=30.0, bitrate=500_000, pixel_format='yuv420p', hdr=False)],
+        audio_streams=[AudioStreamInfo(codec='aac', sample_rate=48000, channels=2, bitrate=96_000)],
+    )
+    monkeypatch.setattr(worker, 'run_ffprobe', lambda *a, **kw: fake_probe)
     monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps({
         'mode': 'download',
         'url': 'https://www.pornhub.com/view_video.php?viewkey=test',
@@ -187,8 +207,6 @@ def test_stale_browser_manifest_is_refreshed_once(tmp_path, monkeypatch, capsys)
     commands = []
     def ffmpeg(command, **kwargs):
         commands.append(command)
-        if len(commands) == 1:
-            return subprocess.CompletedProcess(command, 1, b'', b'Duration: 00:00:02.00')
         (tmp_path / 'video.mp4').write_bytes(b'mp4')
         return subprocess.CompletedProcess(command, 0, b'', b'')
     monkeypatch.setattr(worker.subprocess, 'run', ffmpeg)
